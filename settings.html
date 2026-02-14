@@ -32,6 +32,21 @@
             </div>
             <hr />
 
+            <!-- Known Characters -->
+            <div class="mm-section">
+                <div class="mm-section-title">已知角色（不生成详细档案）</div>
+                <label for="mm_known_characters">
+                    角色名（逗号分隔，{{char}}自动包含）
+                </label>
+                <input id="mm_known_characters" class="text_pole" type="text"
+                       placeholder="例如：老王,小李,大师兄" />
+                <small style="opacity:0.6">
+                    这些角色来自角色卡/主设定，只追踪对{{user}}的态度变化，不会生成外貌/性格档案。
+                    未列出的新角色仍会获得完整NPC档案。
+                </small>
+            </div>
+            <hr />
+
             <!-- Injection Settings -->
             <div class="mm-section">
                 <div class="mm-section-title">注入设置</div>
@@ -126,12 +141,18 @@
                         <!-- Timeline -->
                         <div style="margin-bottom:6px"><b>剧情时间线</b></div>
                         <div id="mm_bible_timeline" class="mm-bible-preview">（尚无数据）</div>
-                        <div class="mm-action-row" style="margin-top:4px">
+                        <div id="mm_timeline_btn_row" class="mm-action-row" style="margin-top:4px">
                             <button id="mm_edit_timeline">编辑时间线</button>
                         </div>
 
-                        <!-- Characters -->
-                        <div style="margin-top:10px;margin-bottom:6px"><b>人物档案 (hover查看详情)</b></div>
+                        <!-- Known Character Attitudes -->
+                        <div style="margin-top:10px;margin-bottom:6px"><b>已知角色态度</b></div>
+                        <div id="mm_bible_known_chars" class="mm-char-tags">
+                            <span class="mm-empty-state">暂无数据</span>
+                        </div>
+
+                        <!-- NPC Characters -->
+                        <div style="margin-top:10px;margin-bottom:6px"><b>NPC角色档案 (hover查看详情)</b></div>
                         <div id="mm_bible_characters" class="mm-char-tags">
                             <span class="mm-empty-state">暂无人物数据</span>
                         </div>
