@@ -1,0 +1,188 @@
+<div class="mm-settings-container">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>Memory Manager v4 — PageIndex 记忆管理</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+
+            <!-- Basic Controls -->
+            <div class="mm-section">
+                <label class="checkbox_label" for="mm_enabled">
+                    <input id="mm_enabled" type="checkbox" />
+                    <span>启用自动记忆管理</span>
+                </label>
+                <label class="checkbox_label" for="mm_debug">
+                    <input id="mm_debug" type="checkbox" />
+                    <span>调试模式</span>
+                </label>
+            </div>
+            <hr />
+
+            <!-- Extraction Settings -->
+            <div class="mm-section">
+                <div class="mm-section-title">记忆提取设置</div>
+                <label for="mm_extraction_interval">
+                    提取间隔: 每 <span id="mm_extraction_interval_value">5</span> 条消息
+                </label>
+                <input id="mm_extraction_interval" type="range" min="3" max="20" step="1" value="5" />
+
+                <label for="mm_extraction_max_tokens">提取API最大响应 (token)</label>
+                <input id="mm_extraction_max_tokens" class="text_pole" type="number" min="256" max="16384" step="256" value="4096" />
+            </div>
+            <hr />
+
+            <!-- Injection Settings -->
+            <div class="mm-section">
+                <div class="mm-section-title">注入设置</div>
+                <label for="mm_index_depth">故事索引注入深度 (depth)</label>
+                <input id="mm_index_depth" class="text_pole" type="number" min="0" max="9999" value="9999" />
+                <small style="opacity:0.6">故事索引始终注入，类似目录索引，保持紧凑。</small>
+
+                <label for="mm_recall_depth">故事页/角色档案注入深度 (depth)</label>
+                <input id="mm_recall_depth" class="text_pole" type="number" min="0" max="100" value="2" />
+
+                <label for="mm_max_pages">
+                    最大检索故事页: <span id="mm_max_pages_value">3</span>
+                </label>
+                <input id="mm_max_pages" type="range" min="1" max="5" step="1" value="3" />
+            </div>
+            <hr />
+
+            <!-- Compression Settings -->
+            <div class="mm-section">
+                <div class="mm-section-title">渐进式压缩</div>
+                <label class="checkbox_label" for="mm_auto_compress">
+                    <input id="mm_auto_compress" type="checkbox" checked />
+                    <span>自动压缩旧记忆页 (释放token空间)</span>
+                </label>
+                <small style="opacity:0.6">
+                    压缩策略: 详细页(L0) → 摘要页(L1) → 归档(L2，融入时间线后删除)。
+                    时间线超过20行也会自动合并旧条目。
+                </small>
+            </div>
+            <hr />
+
+            <!-- Display -->
+            <div class="mm-section">
+                <label class="checkbox_label" for="mm_show_recall_badges">
+                    <input id="mm_show_recall_badges" type="checkbox" checked />
+                    <span>在消息中显示召回的故事页</span>
+                </label>
+            </div>
+            <hr />
+
+            <!-- Auto-hide (上下文管理) -->
+            <div class="mm-section">
+                <div class="mm-section-title">上下文管理</div>
+                <label class="checkbox_label" for="mm_auto_hide">
+                    <input id="mm_auto_hide" type="checkbox" />
+                    <span>提取后自动隐藏旧消息 (释放上下文空间)</span>
+                </label>
+                <div id="mm_auto_hide_fields" style="display:none; margin-top:6px;">
+                    <label for="mm_keep_recent_messages">保留最近N条消息可见</label>
+                    <input id="mm_keep_recent_messages" class="text_pole" type="number" min="3" max="100" step="1" value="10" />
+                    <small style="opacity:0.6">已提取的旧消息将被隐藏。故事索引+按需检索的故事页会替代原文提供记忆。</small>
+                </div>
+            </div>
+            <hr />
+
+            <!-- Secondary API (副API) -->
+            <div class="mm-section">
+                <div class="mm-section-title">副API设置 (记忆提取/检索/压缩用)</div>
+                <label class="checkbox_label" for="mm_use_secondary_api">
+                    <input id="mm_use_secondary_api" type="checkbox" />
+                    <span>使用独立副API (支持 one-api / new-api 等中转站)</span>
+                </label>
+                <small style="opacity:0.6">启用后，记忆提取、LLM导航检索和页面压缩都走副API，不占用主API额度。</small>
+                <div id="mm_secondary_api_fields" style="display:none; margin-top:6px;">
+                    <label for="mm_secondary_api_url">API地址</label>
+                    <input id="mm_secondary_api_url" class="text_pole" type="text" placeholder="https://your-api.com/v1/chat/completions" />
+
+                    <label for="mm_secondary_api_key">API密钥</label>
+                    <input id="mm_secondary_api_key" class="text_pole" type="password" placeholder="sk-..." />
+
+                    <label for="mm_secondary_api_model">模型名称</label>
+                    <input id="mm_secondary_api_model" class="text_pole" type="text" placeholder="gpt-4o-mini / claude-3-haiku / qwen-plus 等" />
+
+                    <label for="mm_secondary_api_temperature">温度 (Temperature)</label>
+                    <input id="mm_secondary_api_temperature" class="text_pole" type="number" min="0" max="2" step="0.1" value="0.3" />
+
+                    <div class="mm-action-row" style="margin-top:6px">
+                        <button id="mm_test_secondary_api">测试连接</button>
+                    </div>
+                </div>
+            </div>
+            <hr />
+
+            <!-- Story Index Preview -->
+            <div class="mm-section">
+                <div class="inline-drawer">
+                    <div class="inline-drawer-toggle inline-drawer-header">
+                        <span class="mm-section-title" style="margin:0">故事索引 (始终在上下文中)</span>
+                        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                    </div>
+                    <div class="inline-drawer-content">
+                        <!-- Timeline -->
+                        <div style="margin-bottom:6px"><b>剧情时间线</b></div>
+                        <div id="mm_bible_timeline" class="mm-bible-preview">（尚无数据）</div>
+                        <div class="mm-action-row" style="margin-top:4px">
+                            <button id="mm_edit_timeline">编辑时间线</button>
+                        </div>
+
+                        <!-- Characters -->
+                        <div style="margin-top:10px;margin-bottom:6px"><b>人物档案 (hover查看详情)</b></div>
+                        <div id="mm_bible_characters" class="mm-char-tags">
+                            <span class="mm-empty-state">暂无人物数据</span>
+                        </div>
+
+                        <!-- Items -->
+                        <div style="margin-top:10px;margin-bottom:6px"><b>重要物品</b></div>
+                        <div id="mm_bible_items" class="mm-item-tags">
+                            <span class="mm-empty-state">暂无物品数据</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <hr />
+
+            <!-- Story Pages Browser -->
+            <div class="mm-section">
+                <div class="inline-drawer">
+                    <div class="inline-drawer-toggle inline-drawer-header">
+                        <span class="mm-section-title" style="margin:0">故事页 (<span id="mm_page_count">0</span> 页 — 详细:<span id="mm_fresh_count">0</span> 摘要:<span id="mm_compressed_count">0</span>)</span>
+                        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                    </div>
+                    <div class="inline-drawer-content">
+                        <div id="mm_page_list" class="mm-memory-list">
+                            <div class="mm-empty-state">暂无故事页</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <hr />
+
+            <!-- Actions & Status -->
+            <div class="mm-section">
+                <div class="mm-action-row">
+                    <button id="mm_initialize" title="从已有聊天记录+世界书+角色卡批量构建记忆">初始化记忆</button>
+                    <button id="mm_force_extract">强制提取</button>
+                    <button id="mm_force_compress">强制压缩</button>
+                    <button id="mm_export">导出记忆</button>
+                    <button id="mm_import">导入记忆</button>
+                    <button id="mm_reset" style="color:#ef4444">重置</button>
+                </div>
+                <div id="mm_init_progress" style="display:none; margin-top:8px;"></div>
+            </div>
+
+            <div class="mm-status-box" id="mm_status">
+                <div>状态: <span id="mm_status_text">未初始化</span></div>
+                <div>已处理消息: <span id="mm_processed_count">0</span></div>
+                <div>待处理消息: <span id="mm_pending_count">0</span></div>
+            </div>
+
+            <div class="mm-version">Memory Manager v4.0.0 (PageIndex)</div>
+
+        </div>
+    </div>
+</div>

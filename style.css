@@ -1,0 +1,567 @@
+/* ============================================
+   Memory Manager v4 — PageIndex Styles
+   ============================================ */
+
+/* ── Message Recall Display (chat bubble) ── */
+
+.mem-recall-display {
+    margin-top: 8px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
+    background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.15));
+    font-size: 13px;
+}
+
+.mem-recall-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    user-select: none;
+    opacity: 0.8;
+    transition: opacity 0.15s;
+}
+
+.mem-recall-toggle:hover {
+    opacity: 1;
+}
+
+.mem-recall-icon {
+    font-size: 14px;
+}
+
+.mem-recall-label {
+    flex: 1;
+    font-weight: 500;
+    color: var(--SmartThemeBodyColor, #ccc);
+}
+
+.mem-recall-arrow {
+    font-size: 10px;
+    transition: transform 0.2s;
+    color: var(--SmartThemeBodyColor, #ccc);
+}
+
+.mem-recall-arrow.open {
+    transform: rotate(180deg);
+}
+
+.mem-recall-content {
+    display: none;
+    padding: 0 10px 8px;
+}
+
+.mem-recall-content.open {
+    display: block;
+}
+
+.mem-recall-item {
+    padding: 6px 0;
+    border-top: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.05));
+}
+
+.mem-recall-item:first-child {
+    border-top: none;
+}
+
+.mem-recall-item-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 3px;
+}
+
+.mem-recall-item-day {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--SmartThemeQuoteColor, #666);
+    color: var(--SmartThemeBodyColor, #fff);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.mem-recall-item-title {
+    font-weight: 500;
+    color: var(--SmartThemeBodyColor, #ddd);
+}
+
+.mem-recall-item-sig {
+    font-size: 10px;
+    opacity: 0.6;
+}
+
+.mem-recall-item-level {
+    font-size: 10px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    opacity: 0.7;
+    background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.2));
+    color: var(--SmartThemeBodyColor, #aaa);
+}
+
+.mem-sig-high {
+    color: #f59e0b;
+}
+
+.mem-sig-medium {
+    color: #6b7280;
+}
+
+.mem-recall-item-body {
+    color: var(--SmartThemeBodyColor, #bbb);
+    opacity: 0.85;
+    font-size: 12px;
+    line-height: 1.5;
+    padding-left: 4px;
+    font-style: italic;
+}
+
+/* ── Settings Panel ── */
+
+.mm-settings-container .inline-drawer-content {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+}
+
+.mm-section {
+    margin-bottom: 4px;
+}
+
+.mm-section-title {
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 4px;
+    color: var(--SmartThemeBodyColor, #ccc);
+}
+
+.mm-status-box {
+    padding: 8px 10px;
+    background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.15));
+    border-radius: 6px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--SmartThemeBodyColor, #aaa);
+}
+
+/* ── Story Index & Memory Browser ── */
+
+.mm-bible-preview {
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 8px;
+    background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.1));
+    border-radius: 6px;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--SmartThemeBodyColor, #bbb);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.05));
+}
+
+.mm-char-tags, .mm-item-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.mm-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.2));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
+    color: var(--SmartThemeBodyColor, #ccc);
+    cursor: default;
+}
+
+.mm-memory-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.mm-memory-card {
+    padding: 8px 10px;
+    background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.1));
+    border-radius: 6px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.05));
+}
+
+.mm-memory-card.mm-level-fresh {
+    border-left: 3px solid #22c55e;
+}
+
+.mm-memory-card.mm-level-compressed {
+    border-left: 3px solid #f59e0b;
+    opacity: 0.85;
+}
+
+.mm-memory-card-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.mm-memory-card-day {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--SmartThemeQuoteColor, #555);
+    color: var(--SmartThemeBodyColor, #fff);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.mm-memory-card-title {
+    flex: 1;
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--SmartThemeBodyColor, #ddd);
+}
+
+.mm-memory-card-sig {
+    font-size: 10px;
+    opacity: 0.6;
+}
+
+.mm-memory-card-level {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 500;
+}
+
+.mm-memory-card-level.mm-level-fresh {
+    background: rgba(34, 197, 94, 0.15);
+    color: #22c55e;
+    border: none;
+}
+
+.mm-memory-card-level.mm-level-compressed {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border: none;
+}
+
+.mm-memory-card-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    margin-bottom: 4px;
+}
+
+.mm-memory-card-tags .mm-tag {
+    font-size: 10px;
+    padding: 1px 5px;
+}
+
+.mm-memory-card-body {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--SmartThemeBodyColor, #bbb);
+    opacity: 0.85;
+    font-style: italic;
+}
+
+.mm-memory-card-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+    justify-content: flex-end;
+}
+
+.mm-memory-card-actions button {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
+    background: transparent;
+    color: var(--SmartThemeBodyColor, #aaa);
+    cursor: pointer;
+}
+
+.mm-memory-card-actions button:hover {
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.1));
+}
+
+.mm-memory-card-actions button.mm-btn-danger:hover {
+    color: #ef4444;
+    border-color: #ef4444;
+}
+
+.mm-empty-state {
+    text-align: center;
+    padding: 20px;
+    opacity: 0.5;
+    font-size: 12px;
+    color: var(--SmartThemeBodyColor, #888);
+}
+
+/* ── Action Buttons ── */
+
+.mm-action-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.mm-action-row button {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
+    background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.15));
+    color: var(--SmartThemeBodyColor, #ccc);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.mm-action-row button:hover {
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.1));
+}
+
+/* ── Edit Modal ── */
+
+.mm-edit-area {
+    width: 100%;
+    min-height: 120px;
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
+    background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.2));
+    color: var(--SmartThemeBodyColor, #ccc);
+    font-size: 12px;
+    line-height: 1.5;
+    resize: vertical;
+    font-family: inherit;
+}
+
+.mm-edit-area:focus {
+    outline: none;
+    border-color: var(--SmartThemeQuoteColor, #666);
+}
+
+/* ── Misc ── */
+
+.mm-version {
+    font-size: 11px;
+    opacity: 0.4;
+    margin-top: 4px;
+    text-align: right;
+}
+
+/* ── Recall Floating Ball (悬浮球) ── */
+
+.mm-recall-fab {
+    position: fixed;
+    width: 64px;
+    height: 64px;
+    background: transparent;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    z-index: 1000;
+    padding: 0;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.mm-recall-fab:active {
+    cursor: grabbing;
+}
+
+.mm-lottie-container {
+    width: 64px;
+    height: 64px;
+    pointer-events: none;
+}
+
+.mm-recall-fab:hover .mm-lottie-container {
+    transform: scale(1.1);
+    transition: transform 0.15s ease;
+}
+
+.mm-recall-fab.has-recall .mm-lottie-container {
+    filter: drop-shadow(0 0 6px rgba(96, 165, 250, 0.5));
+}
+
+.mm-recall-fab-count {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    background: #ef4444;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+}
+
+.mm-recall-panel {
+    position: fixed;
+    width: 380px;
+    max-width: calc(100vw - 16px);
+    max-height: 500px;
+    border-radius: 12px;
+    background: var(--SmartThemeBlurTintColor, rgba(20, 20, 35, 0.95));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.12));
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    z-index: 1001;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    backdrop-filter: blur(12px);
+}
+
+.mm-recall-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.08));
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--SmartThemeBodyColor, #ddd);
+}
+
+.mm-recall-panel-close {
+    cursor: pointer;
+    font-size: 18px;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+    line-height: 1;
+}
+
+.mm-recall-panel-close:hover {
+    opacity: 1;
+}
+
+.mm-recall-panel-body {
+    overflow-y: auto;
+    padding: 10px 14px;
+    flex: 1;
+    max-height: 440px;
+}
+
+.mm-recall-panel-section {
+    margin-bottom: 12px;
+}
+
+.mm-recall-panel-section:last-child {
+    margin-bottom: 0;
+}
+
+.mm-recall-panel-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--SmartThemeBodyColor, #888);
+    opacity: 0.6;
+    margin-bottom: 6px;
+}
+
+.mm-recall-panel-page {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.04));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.06));
+    margin-bottom: 6px;
+}
+
+.mm-recall-panel-page-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.mm-recall-panel-page-day {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--SmartThemeQuoteColor, #555);
+    color: var(--SmartThemeBodyColor, #fff);
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.mm-recall-panel-page-title {
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--SmartThemeBodyColor, #ddd);
+}
+
+.mm-recall-panel-page-body {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--SmartThemeBodyColor, #bbb);
+    opacity: 0.85;
+    font-style: italic;
+}
+
+.mm-recall-panel-char {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.04));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.06));
+    margin-bottom: 6px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--SmartThemeBodyColor, #bbb);
+}
+
+.mm-recall-panel-char-name {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--SmartThemeBodyColor, #ddd);
+    margin-bottom: 4px;
+}
+
+/* ── Initialization Progress ── */
+
+.mm-init-progress-text {
+    font-size: 12px;
+    margin-bottom: 4px;
+    color: var(--SmartThemeBodyColor, #ccc);
+}
+
+.mm-init-progress-bar-track {
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.1));
+    overflow: hidden;
+}
+
+.mm-init-progress-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--SmartThemeQuoteColor, #6b9bd2);
+    transition: width 0.3s ease;
+}
+
+.mm-init-progress-pct {
+    font-size: 11px;
+    margin-top: 2px;
+    text-align: right;
+    opacity: 0.6;
+    color: var(--SmartThemeBodyColor, #aaa);
+}

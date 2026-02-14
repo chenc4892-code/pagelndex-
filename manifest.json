@@ -1,0 +1,14 @@
+{
+    "display_name": "Memory Manager v4 — PageIndex 记忆管理",
+    "loading_order": 15,
+    "requires": [],
+    "optional": [],
+    "generate_interceptor": "memoryManager_retrieveMemories",
+    "js": "index.js",
+    "css": "style.css",
+    "author": "金瓜瓜@gua.guagua.uk",
+    "version": "4.0.0",
+    "homePage": "https://github.com/chenc4892-code/-wiki-by-.git",
+    "auto_update": true
+
+}
