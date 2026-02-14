@@ -1,5 +1,5 @@
 /* ============================================
-   Memory Manager v4 — PageIndex Styles
+   Memory Manager v5 — PageIndex+Embedding+Agent Styles
    ============================================ */
 
 /* ── Message Recall Display (chat bubble) ── */
@@ -533,6 +533,88 @@
     font-size: 13px;
     color: var(--SmartThemeBodyColor, #ddd);
     margin-bottom: 4px;
+}
+
+/* ── Save Slot Cards ── */
+
+.mm-slot-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 250px;
+    overflow-y: auto;
+}
+
+.mm-slot-card {
+    padding: 8px 10px;
+    background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.1));
+    border-radius: 6px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.05));
+}
+
+.mm-slot-card.mm-slot-active {
+    border-left: 3px solid #60a5fa;
+}
+
+.mm-slot-card-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 3px;
+}
+
+.mm-slot-card-name {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--SmartThemeBodyColor, #ddd);
+}
+
+.mm-slot-badge {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(96, 165, 250, 0.15);
+    color: #60a5fa;
+    font-weight: 500;
+}
+
+.mm-slot-card-time {
+    font-size: 11px;
+    opacity: 0.5;
+    color: var(--SmartThemeBodyColor, #aaa);
+    margin-bottom: 4px;
+}
+
+.mm-slot-card-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.mm-slot-card-actions button {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
+    background: transparent;
+    color: var(--SmartThemeBodyColor, #aaa);
+    cursor: pointer;
+}
+
+.mm-slot-card-actions button:hover {
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.1));
+}
+
+.mm-slot-card-actions button.mm-btn-danger:hover {
+    color: #ef4444;
+    border-color: #ef4444;
+}
+
+/* ── Category Tags ── */
+
+.mm-cat-tag {
+    background: transparent;
+    font-weight: 500;
 }
 
 /* ── Initialization Progress ── */

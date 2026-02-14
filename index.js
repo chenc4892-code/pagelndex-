@@ -1,16 +1,17 @@
 /**
- * Memory Manager v4.0 — PageIndex Architecture
+ * Memory Manager v5.0 — PageIndex + Embedding + MemGPT Agent
  *
- * Three-layer memory system inspired by pageIndex + Claude Code compressor:
- *   Layer 1: Story Index (always injected, compact ~800 tokens, bounded)
- *   Layer 2: Story Pages (retrieved on demand, detailed event descriptions)
- *   Layer 3: Character Dossiers (retrieved on demand, detailed profiles)
+ * Three-layer memory system with semantic retrieval:
+ *   Layer 1: Story Index (always injected, compact ~400-600 tokens, bounded)
+ *   Layer 2: Story Pages (retrieved on demand via embedding + agent)
+ *   Layer 3: Character Dossiers (retrieved on demand)
  *
- * Key innovations over v3:
- *   - Story Index stays bounded via progressive compression
- *   - LLM-navigated retrieval (secondary API reads index → selects pages)
- *   - Old events auto-compress: Fresh(L0) → Compressed(L1) → Archived(L2)
- *   - Characters stored as dossiers, only injected when relevant
+ * v5 additions over v4:
+ *   - Independent save system (memory persists across chats per character)
+ *   - Semantic category tags (emotional/relationship/intimate/promise/conflict/discovery/turning_point/daily)
+ *   - Embedding vector retrieval (direct browser fetch to 中转站 /v1/embeddings)
+ *   - Enhanced memory agent (6 tools, multi-round reasoning)
+ *   - Unified retrieval flow: embedding pre-filter → agent → keyword fallback
  */
 
 import {
@@ -48,12 +49,37 @@ const MODULE_NAME = 'memory_manager';
 const LOG_PREFIX = '[MemMgr]';
 const PROMPT_KEY_INDEX = 'mm_story_index';
 const PROMPT_KEY_PAGES = 'mm_recalled_pages';
-const DATA_VERSION = 2;
+const DATA_VERSION = 4;
 
 // Compression level constants
 const COMPRESS_FRESH = 0;      // Full detail, 100-300 chars
 const COMPRESS_SUMMARY = 1;    // Compressed, 30-80 chars
 const COMPRESS_ARCHIVED = 2;   // Merged into timeline, page deleted
+
+// Semantic category constants
+const MEMORY_CATEGORIES = {
+    emotional:      '情感',
+    relationship:   '关系',
+    intimate:       '亲密',
+    promise:        '承诺',
+    conflict:       '冲突',
+    discovery:      '发现',
+    turning_point:  '转折',
+    daily:          '日常',
+};
+const VALID_CATEGORIES = new Set(Object.keys(MEMORY_CATEGORIES));
+
+// Category color mapping (for UI)
+const CATEGORY_COLORS = {
+    emotional:      '#ec4899',
+    relationship:   '#f59e0b',
+    intimate:       '#ef4444',
+    promise:        '#8b5cf6',
+    conflict:       '#f97316',
+    discovery:      '#06b6d4',
+    turning_point:  '#22c55e',
+    daily:          '#6b7280',
+};
 
 // Lottie mood system
 const LOTTIE_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie_light.min.js';
@@ -96,6 +122,18 @@ const DEFAULT_SETTINGS = {
     secondaryApiKey: '',
     secondaryApiModel: '',
     secondaryApiTemperature: 0.3,
+    // Known characters (from char card / world info, only track attitude, no full dossier)
+    knownCharacters: '',
+    // === v5 additions ===
+    // Independent save system
+    autoSaveSlot: true,
+    // Embedding vector retrieval
+    useEmbedding: false,
+    embeddingModel: 'text-embedding-3-large',
+    embeddingDimensions: 256,
+    embeddingTopK: 10,
+    embeddingApiUrl: '',        // Empty = reuse secondaryApiUrl
+    embeddingApiKey: '',        // Empty = reuse secondaryApiKey
 };
 
 // ============================================================
@@ -175,6 +213,10 @@ function toggleSecondaryApiFields(show) {
 
 function toggleAutoHideFields(show) {
     $('#mm_auto_hide_fields').toggle(show);
+}
+
+function toggleEmbeddingFields(show) {
+    $('#mm_embedding_fields').toggle(show);
 }
 
 // ============================================================
@@ -443,11 +485,48 @@ function loadSettings() {
     $('#mm_secondary_api_model').val(s.secondaryApiModel);
     $('#mm_secondary_api_temperature').val(s.secondaryApiTemperature);
     toggleSecondaryApiFields(s.useSecondaryApi);
+
+    // Known characters
+    $('#mm_known_characters').val(s.knownCharacters);
+
+    // Save management
+    $('#mm_auto_save_slot').prop('checked', s.autoSaveSlot);
+
+    // Embedding
+    $('#mm_use_embedding').prop('checked', s.useEmbedding);
+    $('#mm_embedding_model').val(s.embeddingModel);
+    $('#mm_embedding_dimensions').val(s.embeddingDimensions);
+    $('#mm_embedding_dimensions_value').text(s.embeddingDimensions);
+    $('#mm_embedding_top_k').val(s.embeddingTopK);
+    $('#mm_embedding_top_k_value').text(s.embeddingTopK);
+    $('#mm_embedding_api_url').val(s.embeddingApiUrl);
+    $('#mm_embedding_api_key').val(s.embeddingApiKey);
+    toggleEmbeddingFields(s.useEmbedding);
+
+    // Update slot display
+    refreshSlotListUI();
 }
 
 function saveSetting(key, value) {
     getSettings()[key] = value;
     saveSettingsDebounced();
+}
+
+/**
+ * Get the set of known character names (from settings + {{char}}).
+ * These characters only get attitude tracking, not full dossiers.
+ */
+function getKnownCharacterNames() {
+    const s = getSettings();
+    const ctx = getContext();
+    const charName = (ctx.name2 || '').trim(); // {{char}} = name2
+    const fromSetting = (s.knownCharacters || '')
+        .split(/[,，]/)
+        .map(n => n.trim())
+        .filter(Boolean);
+    const result = new Set(fromSetting);
+    if (charName) result.add(charName);
+    return result;
 }
 
 function bindSettingsPanel() {
@@ -468,6 +547,7 @@ function bindSettingsPanel() {
     });
     $('#mm_show_recall_badges').on('change', function () { saveSetting('showRecallBadges', this.checked); });
     $('#mm_auto_compress').on('change', function () { saveSetting('autoCompress', this.checked); });
+    $('#mm_known_characters').on('change', function () { saveSetting('knownCharacters', this.value.trim()); });
 
     // Auto-hide bindings
     $('#mm_auto_hide').on('change', function () {
@@ -486,6 +566,70 @@ function bindSettingsPanel() {
     $('#mm_secondary_api_model').on('change', function () { saveSetting('secondaryApiModel', this.value.trim()); });
     $('#mm_secondary_api_temperature').on('change', function () { saveSetting('secondaryApiTemperature', Number(this.value)); });
     $('#mm_test_secondary_api').on('click', testSecondaryApi);
+
+    // Save management bindings
+    $('#mm_auto_save_slot').on('change', function () { saveSetting('autoSaveSlot', this.checked); });
+    $('#mm_save_now').on('click', async () => {
+        const charName = getCurrentCharName();
+        if (!charName) { toastr.warning('请先选择角色'); return; }
+        const idx = getSaveIndex();
+        const active = idx[charName]?.activeSlot || '主线';
+        await saveToSlot(charName, active);
+        toastr.success(`已保存到存档「${active}」`);
+        refreshSlotListUI();
+    });
+    $('#mm_new_slot').on('click', async () => {
+        const charName = getCurrentCharName();
+        if (!charName) { toastr.warning('请先选择角色'); return; }
+        const name = prompt('新存档名称:', `IF线${Date.now() % 1000}`);
+        if (!name) return;
+        await saveToSlot(charName, name.trim());
+        toastr.success(`已创建存档「${name.trim()}」`);
+        refreshSlotListUI();
+    });
+
+    // Embedding bindings
+    $('#mm_use_embedding').on('change', function () {
+        saveSetting('useEmbedding', this.checked);
+        toggleEmbeddingFields(this.checked);
+    });
+    $('#mm_embedding_model').on('change', function () { saveSetting('embeddingModel', this.value.trim()); });
+    $('#mm_embedding_dimensions').on('input', function () {
+        const v = Number(this.value);
+        $('#mm_embedding_dimensions_value').text(v);
+        saveSetting('embeddingDimensions', v);
+    });
+    $('#mm_embedding_top_k').on('input', function () {
+        const v = Number(this.value);
+        $('#mm_embedding_top_k_value').text(v);
+        saveSetting('embeddingTopK', v);
+    });
+    $('#mm_embedding_api_url').on('change', function () { saveSetting('embeddingApiUrl', this.value.trim()); });
+    $('#mm_embedding_api_key').on('change', function () { saveSetting('embeddingApiKey', this.value.trim()); });
+    $('#mm_test_embedding').on('click', async () => {
+        try {
+            const result = await testEmbeddingApi();
+            $('#mm_embedding_status').text(`连接成功！向量维度: ${result}`);
+            toastr.success('Embedding API 连接成功');
+        } catch (err) {
+            $('#mm_embedding_status').text(`连接失败: ${err.message}`);
+            toastr.error('Embedding API 连接失败: ' + err.message);
+        }
+    });
+    $('#mm_rebuild_vectors').on('click', async () => {
+        if (!confirm('重建向量库将为所有页面重新生成向量，确认？')) return;
+        try {
+            $('#mm_embedding_status').text('正在重建向量库...');
+            await rebuildAllVectors();
+            const data = getMemoryData();
+            const count = Object.keys(data.embeddings).length;
+            $('#mm_embedding_status').text(`重建完成！已索引 ${count} 个页面`);
+            toastr.success(`向量库重建完成，${count} 个页面已索引`);
+        } catch (err) {
+            $('#mm_embedding_status').text(`重建失败: ${err.message}`);
+            toastr.error('向量库重建失败: ' + err.message);
+        }
+    });
 
     // Action buttons
     $('#mm_force_extract').on('click', () => safeExtract(true));
@@ -508,14 +652,21 @@ function createDefaultData() {
         // Timeline text (maintained by LLM, periodically compressed)
         timeline: '',
 
-        // Character dossiers (full detail)
+        // Known character attitudes (from char card / settings, attitude only)
+        knownCharacterAttitudes: [],
+
+        // NPC character dossiers (full detail, for new/random NPCs)
         characters: [],
 
         // Item list
         items: [],
 
         // Story pages (detailed event descriptions, progressively compressed)
+        // Each page now includes: categories: string[] (semantic tags)
         pages: [],
+
+        // Embedding vector cache: { [pageId]: number[] }
+        embeddings: {},
 
         // Processing state
         processing: {
@@ -547,7 +698,6 @@ function migrateV1toV2(oldData) {
             appearance: c.appearance || '',
             personality: c.personality || '',
             attitude: c.relationship || c.attitude || '',
-            currentState: '',
         }));
     }
 
@@ -593,6 +743,73 @@ function migrateV1toV2(oldData) {
     return newData;
 }
 
+/**
+ * Migrate v2 data to v3: split characters into knownCharacterAttitudes + NPC characters.
+ */
+function migrateV2toV3(oldData) {
+    log('Migrating data from v2 to v3...');
+    const newData = createDefaultData();
+
+    newData.timeline = oldData.timeline || '';
+    newData.items = oldData.items || [];
+    newData.pages = oldData.pages || [];
+    newData.processing = { ...newData.processing, ...(oldData.processing || {}) };
+    newData.messageRecalls = oldData.messageRecalls || {};
+
+    // Split characters into known vs new NPC
+    const knownNames = getKnownCharacterNames();
+    if (Array.isArray(oldData.characters)) {
+        for (const c of oldData.characters) {
+            if (!c.name) continue;
+            const attitude = c.attitude || c.relationship || '';
+            if (knownNames.has(c.name)) {
+                newData.knownCharacterAttitudes.push({
+                    name: c.name,
+                    attitude: attitude,
+                });
+            } else {
+                newData.characters.push({
+                    name: c.name,
+                    appearance: c.appearance || '',
+                    personality: c.personality || '',
+                    attitude: attitude,
+                });
+            }
+        }
+    }
+
+    log('Migration v2->v3 complete. Known:', newData.knownCharacterAttitudes.length,
+        'NPC:', newData.characters.length);
+    return newData;
+}
+
+/**
+ * Migrate v3 data to v4: add categories to pages + embeddings cache.
+ */
+function migrateV3toV4(oldData) {
+    log('Migrating data from v3 to v4...');
+    const newData = createDefaultData();
+
+    newData.timeline = oldData.timeline || '';
+    newData.knownCharacterAttitudes = oldData.knownCharacterAttitudes || [];
+    newData.characters = oldData.characters || [];
+    newData.items = oldData.items || [];
+    newData.processing = { ...newData.processing, ...(oldData.processing || {}) };
+    newData.messageRecalls = oldData.messageRecalls || {};
+
+    // Migrate pages: add categories field to each page
+    newData.pages = (oldData.pages || []).map(p => ({
+        ...p,
+        categories: Array.isArray(p.categories) ? p.categories : [],
+    }));
+
+    // Embeddings start empty (user can rebuild via "重建向量库" button)
+    newData.embeddings = {};
+
+    log('Migration v3->v4 complete. Pages:', newData.pages.length);
+    return newData;
+}
+
 function getMemoryData() {
     const ctx = getContext();
     if (!ctx.chatMetadata) return createDefaultData();
@@ -601,26 +818,33 @@ function getMemoryData() {
     }
     let d = ctx.chatMetadata.memoryManager;
 
-    // Handle migration from v1
+    // Handle migration chain
     if (d.version !== DATA_VERSION) {
         if (d.version === 1 || d.storyBible) {
             d = migrateV1toV2(d);
-            ctx.chatMetadata.memoryManager = d;
-            saveMemoryData();
-            log('Data migrated and saved');
-        } else {
+        }
+        if (d.version === 2) {
+            d = migrateV2toV3(d);
+        }
+        if (d.version === 3) {
+            d = migrateV3toV4(d);
+        }
+        if (d.version !== DATA_VERSION) {
             d.version = DATA_VERSION;
         }
+        ctx.chatMetadata.memoryManager = d;
+        saveMemoryData();
+        log('Data migrated and saved');
     }
 
-    // Migrate character field: relationship → attitude (in-place for v2 data)
-    if (Array.isArray(d.characters)) {
-        for (const c of d.characters) {
-            if (c.relationship && !c.attitude) {
-                c.attitude = c.relationship;
-                delete c.relationship;
-            }
-        }
+    // Ensure knownCharacterAttitudes exists for older v3 data
+    if (!Array.isArray(d.knownCharacterAttitudes)) {
+        d.knownCharacterAttitudes = [];
+    }
+
+    // Ensure embeddings object exists
+    if (!d.embeddings || typeof d.embeddings !== 'object') {
+        d.embeddings = {};
     }
 
     return d;
@@ -628,6 +852,362 @@ function getMemoryData() {
 
 function saveMemoryData() {
     saveMetadataDebounced();
+}
+
+// ============================================================
+//  Independent Save System (存档系统)
+// ============================================================
+
+function getSaveIndex() {
+    const s = getSettings();
+    if (!s.saveIndex) s.saveIndex = {};
+    return s.saveIndex;
+}
+
+function updateSaveIndex(charName, slotData) {
+    const idx = getSaveIndex();
+    idx[charName] = slotData;
+    saveSettingsDebounced();
+}
+
+function listSlots(charName) {
+    const idx = getSaveIndex();
+    return idx[charName]?.slots || [];
+}
+
+function getActiveSlotName(charName) {
+    const idx = getSaveIndex();
+    return idx[charName]?.activeSlot || null;
+}
+
+async function saveToSlot(charName, slotName) {
+    if (!charName) return;
+    const data = getMemoryData();
+
+    // Serialize memory data
+    const saveData = { ...data };
+    const json = JSON.stringify(saveData);
+    const bytes = new TextEncoder().encode(json);
+    let binary = '';
+    for (const b of bytes) binary += String.fromCharCode(b);
+    const base64 = btoa(binary);
+
+    // Sanitize filename: ST only allows [a-zA-Z0-9_-], no Chinese chars
+    const safeChar = charName.replace(/[^a-zA-Z0-9_-]/g, '') || 'char';
+    const safeSlot = slotName.replace(/[^a-zA-Z0-9_-]/g, '') || 'slot';
+    const fileName = `mm-save-${safeChar}-${safeSlot}-${Date.now()}.json`;
+
+    try {
+        const response = await fetch('/api/files/upload', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({
+                name: fileName,
+                data: base64,
+            }),
+        });
+
+        if (!response.ok) {
+            throw new Error(`Upload failed: ${response.status}`);
+        }
+
+        const result = await response.json();
+        const filePath = result.path;
+
+        // Update save index
+        const idx = getSaveIndex();
+        if (!idx[charName]) {
+            idx[charName] = { activeSlot: slotName, slots: [] };
+        }
+
+        // Find existing slot or create new
+        const existingSlot = idx[charName].slots.find(s => s.name === slotName);
+        if (existingSlot) {
+            // Delete old file
+            try {
+                await fetch('/api/files/delete', {
+                    method: 'POST',
+                    headers: getRequestHeaders(),
+                    body: JSON.stringify({ path: existingSlot.path }),
+                });
+            } catch (e) {
+                warn('Failed to delete old save file:', e);
+            }
+            existingSlot.path = filePath;
+            existingSlot.updatedAt = Date.now();
+            existingSlot.pageCount = data.pages.length;
+        } else {
+            idx[charName].slots.push({
+                name: slotName,
+                path: filePath,
+                updatedAt: Date.now(),
+                pageCount: data.pages.length,
+            });
+        }
+
+        idx[charName].activeSlot = slotName;
+        updateSaveIndex(charName, idx[charName]);
+
+        log('Saved to slot:', charName, slotName, filePath);
+        return true;
+    } catch (err) {
+        warn('Save to slot failed:', err);
+        toastr?.error?.(`存档保存失败: ${err.message}`, 'Memory Manager');
+        return false;
+    }
+}
+
+async function loadFromSlot(charName, slotName) {
+    const idx = getSaveIndex();
+    const slot = idx[charName]?.slots?.find(s => s.name === slotName);
+    if (!slot) {
+        toastr?.warning?.('找不到存档', 'Memory Manager');
+        return false;
+    }
+
+    try {
+        const response = await fetch(slot.path);
+        if (!response.ok) {
+            throw new Error(`Fetch failed: ${response.status}`);
+        }
+
+        let imported = await response.json();
+
+        // Run migration chain if needed
+        if (imported.storyBible || imported.version === 1) {
+            imported = migrateV1toV2(imported);
+        }
+        if (imported.version === 2) {
+            imported = migrateV2toV3(imported);
+        }
+        if (imported.version === 3) {
+            imported = migrateV3toV4(imported);
+        }
+        imported.version = DATA_VERSION;
+
+        const ctx = getContext();
+        ctx.chatMetadata.memoryManager = imported;
+        saveMemoryData();
+
+        // Update active slot
+        idx[charName].activeSlot = slotName;
+        updateSaveIndex(charName, idx[charName]);
+
+        updateBrowserUI();
+        log('Loaded from slot:', charName, slotName);
+        toastr?.success?.(`已加载存档「${slotName}」`, 'Memory Manager');
+        return true;
+    } catch (err) {
+        warn('Load from slot failed:', err);
+        toastr?.error?.(`存档加载失败: ${err.message}`, 'Memory Manager');
+        return false;
+    }
+}
+
+async function deleteSlot(charName, slotName) {
+    const idx = getSaveIndex();
+    const charIdx = idx[charName];
+    if (!charIdx) return;
+
+    const slotIdx = charIdx.slots.findIndex(s => s.name === slotName);
+    if (slotIdx === -1) return;
+
+    const slot = charIdx.slots[slotIdx];
+
+    // Delete file
+    try {
+        await fetch('/api/files/delete', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ path: slot.path }),
+        });
+    } catch (e) {
+        warn('Failed to delete save file:', e);
+    }
+
+    // Remove from index
+    charIdx.slots.splice(slotIdx, 1);
+    if (charIdx.activeSlot === slotName) {
+        charIdx.activeSlot = charIdx.slots.length > 0 ? charIdx.slots[0].name : null;
+    }
+
+    updateSaveIndex(charName, charIdx);
+    log('Deleted slot:', charName, slotName);
+}
+
+function getCurrentCharName() {
+    const ctx = getContext();
+    return (ctx.name2 || '').trim();
+}
+
+async function autoSaveIfEnabled() {
+    const s = getSettings();
+    if (!s.autoSaveSlot) return;
+
+    const charName = getCurrentCharName();
+    if (!charName) return;
+
+    const activeSlot = getActiveSlotName(charName);
+    if (activeSlot) {
+        await saveToSlot(charName, activeSlot);
+    }
+}
+
+// ============================================================
+//  Embedding Vector Retrieval (直接调用中转站 /v1/embeddings)
+// ============================================================
+
+function cosineSimilarity(a, b) {
+    let dot = 0, normA = 0, normB = 0;
+    for (let i = 0; i < a.length; i++) {
+        dot += a[i] * b[i];
+        normA += a[i] * a[i];
+        normB += b[i] * b[i];
+    }
+    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+function getEmbeddingBaseUrl() {
+    const s = getSettings();
+    const url = (s.embeddingApiUrl || s.secondaryApiUrl || '').trim();
+    return url
+        .replace(/\/+$/, '')
+        .replace(/\/chat\/completions\/?$/, '');
+}
+
+function getEmbeddingApiKey() {
+    const s = getSettings();
+    return (s.embeddingApiKey || s.secondaryApiKey || '').trim();
+}
+
+function isEmbeddingConfigured() {
+    const s = getSettings();
+    return s.useEmbedding && getEmbeddingBaseUrl() && getEmbeddingApiKey();
+}
+
+async function callEmbeddingsApi(texts) {
+    const s = getSettings();
+    const baseUrl = getEmbeddingBaseUrl();
+    const apiKey = getEmbeddingApiKey();
+
+    if (!baseUrl || !apiKey) {
+        throw new Error('Embedding API not configured');
+    }
+
+    log('Calling embedding API:', baseUrl, 'model:', s.embeddingModel, 'texts:', texts.length);
+
+    const response = await fetch(`${baseUrl}/embeddings`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+            model: s.embeddingModel || 'text-embedding-3-large',
+            input: texts,
+            dimensions: s.embeddingDimensions || 256,
+        }),
+    });
+
+    if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        throw new Error(`Embedding API error ${response.status}: ${errText.substring(0, 200)}`);
+    }
+
+    const result = await response.json();
+    return result.data.map(d => d.embedding);
+}
+
+async function embedPage(page) {
+    if (!isEmbeddingConfigured()) return;
+    const data = getMemoryData();
+    try {
+        const text = `${page.title}: ${page.content}`;
+        const [vector] = await callEmbeddingsApi([text]);
+        data.embeddings[page.id] = vector;
+        saveMemoryData();
+        log('Embedded page:', page.id, page.title);
+    } catch (err) {
+        warn('Failed to embed page:', page.id, err);
+    }
+}
+
+async function embedAllPages(pages) {
+    if (!isEmbeddingConfigured()) return;
+    const data = getMemoryData();
+    const batchSize = 20;
+
+    for (let i = 0; i < pages.length; i += batchSize) {
+        const batch = pages.slice(i, i + batchSize);
+        const texts = batch.map(p => `${p.title}: ${p.content}`);
+
+        try {
+            const vectors = await callEmbeddingsApi(texts);
+            for (let j = 0; j < batch.length; j++) {
+                data.embeddings[batch[j].id] = vectors[j];
+            }
+        } catch (err) {
+            warn('Failed to embed batch starting at', i, err);
+        }
+    }
+
+    saveMemoryData();
+    log('Embedded all pages:', pages.length);
+}
+
+async function embeddingPreFilter(data, recentText, topK) {
+    try {
+        const [queryVec] = await callEmbeddingsApi([recentText]);
+
+        const scored = [];
+        for (const page of data.pages) {
+            if (page.compressionLevel > COMPRESS_SUMMARY) continue;
+            const pageVec = data.embeddings[page.id];
+            if (!pageVec) continue;
+            const score = cosineSimilarity(queryVec, pageVec);
+            scored.push({ page, score });
+        }
+
+        scored.sort((a, b) => b.score - a.score);
+        const results = scored.slice(0, topK);
+
+        log('Embedding pre-filter results:', results.map(r => `${r.page.title}(${r.score.toFixed(3)})`));
+        return results.map(r => r.page);
+    } catch (err) {
+        warn('Embedding pre-filter failed:', err);
+        return null;
+    }
+}
+
+async function testEmbeddingApi() {
+    try {
+        toastr?.info?.('正在测试Embedding API连接...', 'Memory Manager');
+        const vectors = await callEmbeddingsApi(['测试文本']);
+        if (vectors && vectors[0] && vectors[0].length > 0) {
+            toastr?.success?.(`Embedding连接成功！返回${vectors[0].length}维向量`, 'Memory Manager');
+        } else {
+            toastr?.error?.('Embedding API返回了空结果', 'Memory Manager');
+        }
+    } catch (err) {
+        toastr?.error?.(`Embedding连接失败: ${err.message}`, 'Memory Manager');
+    }
+}
+
+async function rebuildAllVectors() {
+    const data = getMemoryData();
+    const pages = data.pages.filter(p => p.compressionLevel <= COMPRESS_SUMMARY);
+    if (pages.length === 0) {
+        toastr?.warning?.('没有可索引的页面', 'Memory Manager');
+        return;
+    }
+
+    toastr?.info?.(`正在为${pages.length}个页面生成向量...`, 'Memory Manager');
+    data.embeddings = {};
+    await embedAllPages(pages);
+
+    const indexed = Object.keys(data.embeddings).length;
+    toastr?.success?.(`向量库重建完成: ${indexed}/${pages.length} 页已索引`, 'Memory Manager');
+    updateBrowserUI();
 }
 
 // ============================================================
@@ -757,8 +1337,10 @@ function fixJsonString(raw) {
  * Only timeline + items. Characters are fully on-demand via tool calling.
  * Target: ~400-600 tokens maximum.
  */
-function formatStoryIndex(data, mentionedNames = null) {
+function formatStoryIndex(data) {
     const parts = ['[故事索引]'];
+    const ctx = getContext();
+    const userName = ctx.name1 || '{{user}}';
 
     // Timeline (compact)
     if (data.timeline) {
@@ -774,19 +1356,20 @@ function formatStoryIndex(data, mentionedNames = null) {
         }
     }
 
-    // Character attitudes toward user (filtered to relevant characters)
-    if (data.characters.length > 0) {
-        const relevant = mentionedNames && mentionedNames.size > 0
-            ? data.characters.filter(c => mentionedNames.has(c.name))
-            : data.characters;
-        if (relevant.length > 0) {
-            parts.push('\n三、角色态度');
-            for (const c of relevant) {
-                if (c.attitude) {
-                    parts.push(`· ${c.name}: ${c.attitude}`);
-                }
+    // Known character attitudes (always show all)
+    if (data.knownCharacterAttitudes && data.knownCharacterAttitudes.length > 0) {
+        parts.push(`\n三、已有角色对${userName}态度/关系`);
+        for (const c of data.knownCharacterAttitudes) {
+            if (c.attitude) {
+                parts.push(`· ${c.name}: ${c.attitude}`);
             }
         }
+    }
+
+    // NPC character names (dossiers are on-demand)
+    if (data.characters.length > 0) {
+        const names = data.characters.map(c => c.name).join('、');
+        parts.push(`\n四、已登场NPC: ${names}`);
     }
 
     parts.push('[/故事索引]');
@@ -817,7 +1400,7 @@ function formatDossier(character) {
     parts.push(`[角色档案: ${character.name}]`);
     if (character.appearance) parts.push(`外貌: ${character.appearance}`);
     if (character.personality) parts.push(`性格: ${character.personality}`);
-    if (character.currentState) parts.push(`当前状态: ${character.currentState}`);
+    if (character.attitude) parts.push(`对主角态度: ${character.attitude}`);
     parts.push(`[/角色档案]`);
     return parts.join('\n');
 }
@@ -829,7 +1412,12 @@ function formatDossier(character) {
 function buildExtractionPrompt(data, newMessages) {
     const ctx = getContext();
     const userName = ctx.name1 || '{{user}}';
+    const knownNames = getKnownCharacterNames();
+    const knownCharNamesStr = knownNames.size > 0 ? [...knownNames].join('、') : '（无）';
 
+    const knownAttJson = data.knownCharacterAttitudes.length > 0
+        ? JSON.stringify(data.knownCharacterAttitudes, null, 2)
+        : '[]';
     const charsJson = data.characters.length > 0
         ? JSON.stringify(data.characters, null, 2)
         : '[]';
@@ -837,14 +1425,72 @@ function buildExtractionPrompt(data, newMessages) {
         ? JSON.stringify(data.items, null, 2)
         : '[]';
 
-    return `[OOC: 停止角色扮演。你现在是剧情记忆管理系统。请分析以下新消息，完成记忆提取。
+    return `[OOC: 停止角色扮演。你现在是剧情记忆管理系统。
+## 任务
 
+### 1. 更新时间线
+基于现有时间线和新消息，输出更新后的完整时间线。
+格式规则:
+- 每行格式 "D{天数}: 短句"，每行不超过30字
+- 旧事件合并为 "D{起}-D{止}: 一句话概括"，不超过30字
+- 像书的目录一样简洁，只写关键转折
+- 保留旧条目的核心信息（大幅压缩措辞）
+- 按时间线排列，控制在15行以内
+- 示例: "D1: 纽约初遇，自由女神像约会" "D2-D4: 共同调查失踪案，发现线索"
+
+### 2. 更新角色信息
+分两类输出：
+
+**已知角色**（${knownCharNamesStr}）— 只更新态度：
+  输出到 knownCharacterAttitudes 数组，每项: {name, attitude}
+  attitude: 该角色对主角（${userName}）的态度/关系变化轨迹
+
+**新NPC角色**（不含主角"${userName}"、不含已知角色）：
+  输出到 newCharacters 数组，每项: {name, appearance, personality, attitude}
+  仅收录剧情中新登场的、非已知角色列表中的NPC
+
+### 3. 更新重要物品
+如果有物品变动，更新物品列表。
+每个物品: name, status, significance
+
+### 4. 提取故事页（Story Pages）
+从消息中提取值得记录的事件。每个页面是一个完整事件的因果记录。
+不仅限于重大转折，任何改变事件走向、揭示关键信息、推动关系变化的事件都应记录。
+日常噪音（补妆、移动、整理仪容等不影响剧情的动作）不记录。
+
+每个页面包含:
+- title: 短标题（4-8字）
+- day: 对应时间线中的D几
+- content: 以事件为单位，记录因果链（50-150字）。规则：
+  · 写"为什么"而非仅写"做了什么"（因果关系优先）
+    ❌ "她典当了项链，去买了衣服"
+    ✅ "她卖掉母亲留下的项链，换钱为他买面试穿的西装"
+  · 按事件组织，不按分钟组织。一个事件=起因→经过→结果
+    ❌ "08:14 A摔门 → 08:17 A哭泣 → 08:22 A喊哥哥"
+    ✅ "[清晨] A说出全名后情绪崩溃离开，B追出安抚，C目睹后放弃审讯姿态"
+  · 可记录1-2句决定事件走向的关键对话（用概括语言，禁止大段引用原文台词）
+  · 使用时间段（清晨/上午/下午/傍晚/深夜），禁止精确到分钟
+  · 不要文学修饰和感官细节渲染
+- keywords: 用于检索的关键词数组（3-8个，含角色名、地点、物品、情感关键词）
+- categories: 语义分类标签数组，从以下选择1-3个:
+    "emotional"(情感事件), "relationship"(关系变化),
+    "intimate"(亲密互动), "promise"(承诺/约定),
+    "conflict"(冲突/争执), "discovery"(发现/揭秘),
+    "turning_point"(重大转折), "daily"(日常片段)
+- significance: "high"（重要转折/关系变化）或 "medium"（值得记住但非关键）
+
+如果没有值得记录的事件，newPages为空数组。
+
+现在开始，请分析以下新消息，完成记忆提取。
 ## 当前故事索引
 
 ### 剧情时间线
 ${data.timeline || '（尚无，请从头创建）'}
 
-### 登场人物（当前）
+### 已知角色态度（当前）
+${knownAttJson}
+
+### NPC角色档案（当前）
 ${charsJson}
 
 ### 重要物品（当前）
@@ -853,50 +1499,19 @@ ${itemsJson}
 ## 新消息内容
 ${newMessages}
 
-## 任务
 
-### 1. 更新时间线
-基于现有时间线和新消息，输出更新后的完整时间线。
-格式规则:
-- 最近5天内的事件: 每天单独一行，格式 "D{天数}: 简述"
-- 超过5天的旧事件: 合并为日期范围，格式 "D{起}-D{止}: 这段时期的综合概括"
-- 只记录推动剧情的关键事件和转折，日常琐事不记录
-- 保留所有旧条目的信息（可压缩措辞但不丢失关键事实）
-- 按时间线排列
-- 整个时间线控制在20行以内
-
-### 2. 更新登场人物
-更新NPC人物列表。**不要包含主角"${userName}"**，只记录NPC。
-每个NPC:
-- name: 角色名
-- appearance: 外貌描写
-- personality: 性格特征
-- attitude: 该角色对主角（${userName}）的态度/关系变化轨迹（例如 "从冷漠对立 → 产生裂痕 → 逐渐信任"）
-- currentState: 当前状态/情绪
-
-### 3. 更新重要物品
-如果有物品变动，更新物品列表。
-每个物品: name, status, significance
-
-### 4. 提取故事页（Story Pages）
-从消息中提取值得深度记录的重大事件。每个页面是一个完整事件的详细叙事还原。
-每个页面包含:
-- title: 短标题（4-8字）
-- day: 对应时间线中的D几
-- content: 用文学叙事风格还原场景（80-200字），保留感官细节、情感氛围和因果关系
-- keywords: 用于检索的关键词数组（3-8个，含角色名、地点、物品、情感关键词）
-- significance: "high"（重要转折/关系变化）或 "medium"（值得记住但非关键）
-
-如果没有值得记录的重要事件，newPages为空数组。
 
 ## 输出格式
 严格按以下JSON格式输出，用markdown代码块包裹：
 
 \`\`\`json
 {
-  "timeline": "D1-D3: 概括...\\nD4: ...\\nD5: ...",
-  "characters": [
-    {"name": "...", "appearance": "...", "personality": "...", "attitude": "...", "currentState": "..."}
+  "timeline": "D1: 短句\\nD2: 短句",
+  "knownCharacterAttitudes": [
+    {"name": "...", "attitude": "..."}
+  ],
+  "newCharacters": [
+    {"name": "...", "appearance": "...", "personality": "...", "attitude": "..."}
   ],
   "items": [
     {"name": "...", "status": "...", "significance": "..."}
@@ -907,6 +1522,7 @@ ${newMessages}
       "day": "D1",
       "content": "...",
       "keywords": ["...", "..."],
+      "categories": ["emotional", "relationship"],
       "significance": "high"
     }
   ]
@@ -916,17 +1532,24 @@ ${newMessages}
 注意：
 - 只输出JSON代码块，不要有其他文字
 - 角色名使用实际名字，不用{{char}}或{{user}}
-- **characters中不要包含主角"${userName}"**，只含NPC
-- characters和items要输出完整列表（含未变化的旧条目）
+- knownCharacterAttitudes 只含已知角色（${knownCharNamesStr}）
+- newCharacters 不含主角"${userName}"和已知角色
+- items要输出完整列表（含未变化的旧条目）
 - newPages仅包含本批消息中提取的新页面
-- 时间线要严格控制行数: 旧事件压缩合并，近期事件保持独立
+- categories从以下选1-3个: emotional, relationship, intimate, promise, conflict, discovery, turning_point, daily
+- 时间线每行不超过30字，像目录一样简洁
 ]`;
 }
 
 function buildInitExtractionPrompt(data, messages) {
     const ctx = getContext();
     const userName = ctx.name1 || '{{user}}';
+    const knownNames = getKnownCharacterNames();
+    const knownCharNamesStr = knownNames.size > 0 ? [...knownNames].join('、') : '（无）';
 
+    const knownAttJson = data.knownCharacterAttitudes.length > 0
+        ? JSON.stringify(data.knownCharacterAttitudes, null, 2)
+        : '[]';
     const charsJson = data.characters.length > 0
         ? JSON.stringify(data.characters, null, 2)
         : '[]';
@@ -934,14 +1557,82 @@ function buildInitExtractionPrompt(data, messages) {
         ? JSON.stringify(data.items, null, 2)
         : '[]';
 
-    return `[OOC: 停止角色扮演。你现在是剧情记忆管理系统。我正在从已有内容中批量构建记忆库，请分析以下内容。
+    return `[OOC: 停止角色扮演。你现在是剧情记忆管理系统。以下是你的任务要求
 
+    ## 剧情记忆管理任务
+
+### 1. 更新时间线
+将本批内容中的事件整合进时间线。
+格式规则:
+- 每行格式 "D{天数}: 短句"，每行不超过30字
+- 旧事件合并为 "D{起}-D{止}: 一句话概括"，不超过30字
+- 像书的目录一样简洁，只写关键转折
+- 保留旧条目核心信息
+- 按时间线排列，控制在15行以内
+- 示例: "D1: 纽约初遇，自由女神像约会"
+
+### 2. 更新角色信息
+分两类输出：
+
+**已知角色**（${knownCharNamesStr}）— 只更新态度：
+  输出到 knownCharacterAttitudes 数组，每项: {name, attitude}
+  attitude: 该角色对主角（${userName}）的态度/关系变化轨迹
+  禁止忽略此项！
+
+**新NPC角色**（不含主角"${userName}"、不含已知角色）：
+  输出到 newCharacters 数组，每项: {name, appearance, personality, attitude}
+
+### 3. 更新重要物品
+每个物品: name, status, significance
+
+### 4. 提取故事页（重要！）
+这是初始化流程。为本批内容中所有值得记录的事件创建故事页。
+即使这些事件已经反映在时间线中，仍然需要创建对应的故事页。
+任何改变事件走向、揭示关键信息、推动关系变化的事件都应有一页。
+日常噪音（补妆、移动、整理仪容等不影响剧情的动作）不记录。
+
+每页包含:
+- title: 短标题（4-8字）
+- day: 对应时间线中的D几
+- content: 以事件为单位，记录因果链（50-150字）。规则：
+  · 写"为什么"而非仅写"做了什么"（因果关系优先）
+    ❌ "她典当了项链，去买了衣服"
+    ✅ "她卖掉母亲留下的项链，换钱为他买面试穿的西装"
+  · 按事件组织，不按分钟组织。一个事件=起因→经过→结果
+  · 可记录1-2句决定事件走向的关键对话（概括语言，禁止大段引用原文台词）
+  · 使用时间段（清晨/上午/下午/傍晚/深夜），禁止精确到分钟
+  · 不要文学修饰和感官细节渲染
+- keywords: 关键词数组（3-8个）
+- categories: 语义分类标签数组，从以下选择1-3个:
+    "emotional"(情感事件), "relationship"(关系变化),
+    "intimate"(亲密互动), "promise"(承诺/约定),
+    "conflict"(冲突/争执), "discovery"(发现/揭秘),
+    "turning_point"(重大转折), "daily"(日常片段)
+- significance: "high" 或 "medium"
+
+
+
+注意：
+- 只输出JSON代码块，不要有其他文字
+- 角色名使用实际名字
+- knownCharacterAttitudes 只含已知角色（${knownCharNamesStr}）
+- newCharacters 不含主角"${userName}"和已知角色
+- items要输出完整列表
+- newPages要为每个值得记录的事件都创建，不要遗漏
+- categories从以下选1-3个: emotional, relationship, intimate, promise, conflict, discovery, turning_point, daily
+- 时间线每行不超过30字，像目录一样简洁
+
+---
+以下是本批内容：
 ## 当前故事索引（由之前的批次积累）
 
 ### 剧情时间线
 ${data.timeline || '（尚无，请从头创建）'}
 
-### 登场人物（当前）
+### 已知角色态度（当前）
+${knownAttJson}
+
+### NPC角色档案（当前）
 ${charsJson}
 
 ### 重要物品（当前）
@@ -950,47 +1641,18 @@ ${itemsJson}
 ## 本批内容
 ${messages}
 
-## 任务
-
-### 1. 更新时间线
-将本批内容中的事件整合进时间线。
-格式规则:
-- 格式 "D{天数}: 简述"，每行一条
-- 只记录推动剧情的关键事件和转折
-- 保留所有旧条目
-- 按时间线排列
-
-### 2. 更新登场人物
-更新NPC人物列表。**不要包含主角"${userName}"**，只记录NPC。
-每个NPC:
-- name: 角色名
-- appearance: 外貌描写
-- personality: 性格特征
-- attitude: 该角色对主角（${userName}）的态度/关系变化轨迹
-- currentState: 当前状态/情绪
-
-### 3. 更新重要物品
-每个物品: name, status, significance
-
-### 4. 提取故事页（重要！）
-这是初始化流程。为本批内容中的所有重要事件创建故事页。
-即使这些事件已经反映在时间线中，仍然需要创建对应的故事页。
-每个重大转折、关系变化、情感高潮、关键对话都应该有一页。
-每页包含:
-- title: 短标题（4-8字）
-- day: 对应时间线中的D几
-- content: 用文学叙事风格还原场景（80-200字），保留因果关系与情感氛围
-- keywords: 关键词数组（3-8个）
-- significance: "high" 或 "medium"
-
+# 现在开始按照输出格式输出
 ## 输出格式
 严格按JSON格式输出，用markdown代码块包裹：
 
 \`\`\`json
 {
-  "timeline": "D1: ...\\nD2: ...",
-  "characters": [
-    {"name": "...", "appearance": "...", "personality": "...", "attitude": "...", "currentState": "..."}
+  "timeline": "D1: 短句\\nD2: 短句",
+  "knownCharacterAttitudes": [
+    {"name": "...", "attitude": "..."}
+  ],
+  "newCharacters": [
+    {"name": "...", "appearance": "...", "personality": "...", "attitude": "..."}
   ],
   "items": [
     {"name": "...", "status": "...", "significance": "..."}
@@ -1001,18 +1663,12 @@ ${messages}
       "day": "D1",
       "content": "...",
       "keywords": ["...", "..."],
+      "categories": ["emotional", "relationship"],
       "significance": "high"
     }
   ]
 }
 \`\`\`
-
-注意：
-- 只输出JSON代码块，不要有其他文字
-- 角色名使用实际名字
-- **characters中不要包含主角"${userName}"**，只含NPC
-- characters和items要输出完整列表
-- newPages要为每个重要事件都创建，不要遗漏
 ]`;
 }
 
@@ -1022,19 +1678,82 @@ function applyExtractionResult(data, result) {
         data.timeline = result.timeline;
     }
 
-    // Update characters (filter out protagonist)
-    if (Array.isArray(result.characters) && result.characters.length > 0) {
-        const ctx = getContext();
-        const userName = (ctx.name1 || '').trim().toLowerCase();
-        data.characters = result.characters
-            .filter(c => c.name && c.name.trim().toLowerCase() !== userName)
+    const ctx = getContext();
+    const userName = (ctx.name1 || '').trim().toLowerCase();
+    const knownNames = getKnownCharacterNames();
+    const knownLower = new Set([...knownNames].map(n => n.toLowerCase()));
+
+    // Update known character attitudes (new format)
+    if (Array.isArray(result.knownCharacterAttitudes) && result.knownCharacterAttitudes.length > 0) {
+        for (const incoming of result.knownCharacterAttitudes) {
+            if (!incoming.name) continue;
+            // Only accept characters actually in the known list
+            if (!knownLower.has(incoming.name.trim().toLowerCase())) continue;
+            const existing = data.knownCharacterAttitudes.find(
+                k => k.name.toLowerCase() === incoming.name.trim().toLowerCase(),
+            );
+            if (existing) {
+                if (incoming.attitude) existing.attitude = incoming.attitude;
+            } else {
+                data.knownCharacterAttitudes.push({
+                    name: incoming.name.trim(),
+                    attitude: incoming.attitude || '',
+                });
+            }
+        }
+    }
+
+    // Update new NPC characters (new format)
+    if (Array.isArray(result.newCharacters) && result.newCharacters.length > 0) {
+        data.characters = result.newCharacters
+            .filter(c => c.name
+                && c.name.trim().toLowerCase() !== userName
+                && !knownLower.has(c.name.trim().toLowerCase()),
+            )
             .map(c => ({
                 name: c.name || '',
                 appearance: c.appearance || '',
                 personality: c.personality || '',
-                attitude: c.attitude || c.relationship || '',
-                currentState: c.currentState || '',
+                attitude: c.attitude || '',
             }));
+    }
+
+    // Backward compatibility: if LLM returns old "characters" array instead of split format
+    if (Array.isArray(result.characters) && !result.newCharacters) {
+        for (const c of result.characters) {
+            if (!c.name || c.name.trim().toLowerCase() === userName) continue;
+            const attitude = c.attitude || c.relationship || '';
+            if (knownLower.has(c.name.trim().toLowerCase())) {
+                // Known character → update attitude only
+                const existing = data.knownCharacterAttitudes.find(
+                    k => k.name.toLowerCase() === c.name.trim().toLowerCase(),
+                );
+                if (existing) {
+                    if (attitude) existing.attitude = attitude;
+                } else {
+                    data.knownCharacterAttitudes.push({
+                        name: c.name.trim(),
+                        attitude: attitude,
+                    });
+                }
+            } else {
+                // NPC character
+                const existingIdx = data.characters.findIndex(
+                    ch => ch.name.toLowerCase() === c.name.trim().toLowerCase(),
+                );
+                const charData = {
+                    name: c.name || '',
+                    appearance: c.appearance || '',
+                    personality: c.personality || '',
+                    attitude: attitude,
+                };
+                if (existingIdx >= 0) {
+                    data.characters[existingIdx] = charData;
+                } else {
+                    data.characters.push(charData);
+                }
+            }
+        }
     }
 
     // Update items
@@ -1047,6 +1766,7 @@ function applyExtractionResult(data, result) {
     }
 
     // Add new pages
+    const newPageIds = [];
     if (Array.isArray(result.newPages)) {
         for (const page of result.newPages) {
             if (!page.title || !page.content || page.content.length < 10) continue;
@@ -1057,21 +1777,29 @@ function applyExtractionResult(data, result) {
             const charNames = data.characters.map(c => c.name);
             const pageChars = keywords.filter(k => charNames.includes(k));
 
+            // Validate and filter categories
+            const rawCategories = Array.isArray(page.categories) ? page.categories : [];
+            const categories = rawCategories.filter(c => VALID_CATEGORIES.has(c));
+
+            const newId = generateId('pg');
             data.pages.push({
-                id: generateId('pg'),
+                id: newId,
                 day: page.day || '',
                 title: page.title,
                 content: page.content,
                 keywords: keywords,
                 characters: pageChars,
+                categories: categories,
                 significance: page.significance || 'medium',
                 compressionLevel: COMPRESS_FRESH,
                 sourceMessages: [],
                 createdAt: Date.now(),
                 compressedAt: null,
             });
+            newPageIds.push(newId);
         }
     }
+    return newPageIds;
 }
 
 async function performExtraction() {
@@ -1113,10 +1841,21 @@ async function performExtraction() {
 
     log('Extraction complete. Pages:', data.pages.length, 'Timeline updated.');
 
+    // Embed newly created pages
+    if (isEmbeddingConfigured()) {
+        const newPages = data.pages.filter(p => !data.embeddings[p.id] && p.compressionLevel <= COMPRESS_SUMMARY);
+        for (const page of newPages) {
+            await embedPage(page);
+        }
+    }
+
     // Run compression cycle after extraction
     if (getSettings().autoCompress) {
         await safeCompress(false);
     }
+
+    // Auto-save to slot after extraction
+    await autoSaveIfEnabled();
 
     updateBrowserUI();
 }
@@ -1201,9 +1940,10 @@ ${timeline}
 ## 压缩规则
 1. 最近5个条目保持不变
 2. 更早的条目: 相邻的连续天数合并为范围 "D{起}-D{止}: 综合概括"
-3. 合并后的条目用一句话概括该段时期的核心事件
+3. 合并后的条目用不超过30字的短句概括该段时期的核心事件
 4. 压缩后总行数不超过 ${maxEntries} 行
 5. 不丢失任何重要转折点或关系变化
+6. 每行不超过30字，像书的目录一样简洁
 
 ## 输出
 只输出压缩后的时间线文本，每行一条。不要JSON，不要代码块，不要解释。
@@ -1232,6 +1972,11 @@ async function compressPage(data, pageId) {
             page.compressionLevel = COMPRESS_SUMMARY;
             page.compressedAt = Date.now();
             log('Page compressed:', page.title, '→', page.content.length, 'chars');
+
+            // Re-embed after compression (content changed)
+            if (getSettings().useEmbedding && isEmbeddingConfigured()) {
+                try { await embedPage(page); } catch (_) { /* non-critical */ }
+            }
         }
     } catch (err) {
         warn('Failed to compress page:', page.title, err);
@@ -1250,6 +1995,9 @@ function archivePage(data, pageId) {
 
     log('Archiving page:', page.title);
     data.pages.splice(idx, 1);
+
+    // Clean up embedding
+    if (data.embeddings) delete data.embeddings[pageId];
 
     // Clean up messageRecalls referencing this page
     for (const [msgId, ids] of Object.entries(data.messageRecalls)) {
@@ -1388,41 +2136,38 @@ async function hideProcessedMessages() {
 }
 
 // ============================================================
-//  Retrieval Engine (Tool Calling + Keyword Fallback)
+//  Retrieval Engine (Enhanced Agent + Embedding + Keyword Fallback)
 // ============================================================
 
 /**
- * Build the retrieval tools definition for the secondary API.
+ * Build the enhanced retrieval tools (6 tools) for the memory agent.
  */
-function buildRetrievalTools(data) {
+function buildRetrievalTools(data, candidatePages) {
     const tools = [];
+    const availablePages = (candidatePages || data.pages)
+        .filter(p => p.compressionLevel <= COMPRESS_SUMMARY);
 
-    // Tool 1: Recall a story page
-    if (data.pages.length > 0) {
-        const pageEnum = data.pages
-            .filter(p => p.compressionLevel <= COMPRESS_SUMMARY)
-            .map(p => p.id);
-
-        if (pageEnum.length > 0) {
-            tools.push({
-                type: 'function',
-                function: {
-                    name: 'recall_story_page',
-                    description: '检索一个故事页的详细内容，用于为当前对话提供历史事件的详细记忆。可多次调用以检索多个页面。',
-                    parameters: {
-                        type: 'object',
-                        properties: {
-                            page_id: {
-                                type: 'string',
-                                enum: pageEnum,
-                                description: '要检索的故事页ID',
-                            },
+    // Tool 1: Recall a story page (direct retrieval)
+    if (availablePages.length > 0) {
+        const pageEnum = availablePages.map(p => p.id);
+        tools.push({
+            type: 'function',
+            function: {
+                name: 'recall_story_page',
+                description: '检索一个故事页的详细内容。这是最终检索工具，用于获取具体页面。可多次调用。',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        page_id: {
+                            type: 'string',
+                            enum: pageEnum,
+                            description: '要检索的故事页ID',
                         },
-                        required: ['page_id'],
                     },
+                    required: ['page_id'],
                 },
-            });
-        }
+            },
+        });
     }
 
     // Tool 2: Recall a character dossier
@@ -1432,7 +2177,7 @@ function buildRetrievalTools(data) {
             type: 'function',
             function: {
                 name: 'recall_character',
-                description: '检索角色的详细档案（外貌、性格、关系变化、当前状态），用于当对话涉及该角色时提供完整信息。',
+                description: '检索NPC角色的详细档案（外貌、性格、态度）。已知主要角色的态度已在故事索引中。',
                 parameters: {
                     type: 'object',
                     properties: {
@@ -1448,96 +2193,243 @@ function buildRetrievalTools(data) {
         });
     }
 
+    // Tool 3: Search pages by semantic category
+    tools.push({
+        type: 'function',
+        function: {
+            name: 'search_pages_by_category',
+            description: '按语义分类搜索故事页。返回该分类下的页面列表，之后可用 recall_story_page 获取详情。',
+            parameters: {
+                type: 'object',
+                properties: {
+                    category: {
+                        type: 'string',
+                        enum: Object.keys(MEMORY_CATEGORIES),
+                        description: '语义分类: emotional(情感), relationship(关系), intimate(亲密), promise(承诺), conflict(冲突), discovery(发现), turning_point(转折), daily(日常)',
+                    },
+                },
+                required: ['category'],
+            },
+        },
+    });
+
+    // Tool 4: Search pages by day
+    tools.push({
+        type: 'function',
+        function: {
+            name: 'recall_pages_by_day',
+            description: '获取某天发生的所有事件页面列表。之后可用 recall_story_page 获取详情。',
+            parameters: {
+                type: 'object',
+                properties: {
+                    day: { type: 'string', description: '天数，如 "D5" 或 "D3"' },
+                },
+                required: ['day'],
+            },
+        },
+    });
+
+    // Tool 5: Get relationship history with a character
+    tools.push({
+        type: 'function',
+        function: {
+            name: 'get_relationship_history',
+            description: '获取与某角色相关的所有事件页面列表。搜索关键词和角色字段中包含该角色名的页面。',
+            parameters: {
+                type: 'object',
+                properties: {
+                    character_name: { type: 'string', description: '角色名' },
+                },
+                required: ['character_name'],
+            },
+        },
+    });
+
+    // Tool 6: Keyword search
+    tools.push({
+        type: 'function',
+        function: {
+            name: 'search_by_keyword',
+            description: '按关键词搜索故事页。搜索页面的关键词数组。返回匹配的页面列表。',
+            parameters: {
+                type: 'object',
+                properties: {
+                    keyword: { type: 'string', description: '搜索关键词' },
+                },
+                required: ['keyword'],
+            },
+        },
+    });
+
     return tools;
 }
 
 /**
- * Build the retrieval prompt for tool-calling-based retrieval.
- * Shows story index + page catalog + recent conversation.
+ * Execute a search tool locally and return results as text.
  */
-function buildRetrievalPrompt(data, recentText) {
-    const pageCatalog = data.pages
-        .filter(p => p.compressionLevel <= COMPRESS_SUMMARY)
-        .map(p => {
-            const level = p.compressionLevel === COMPRESS_FRESH ? '详细' : '摘要';
-            return `  [${p.id}] ${p.day} | ${p.title} | ${level} | keywords: ${p.keywords.join(',')}`;
-        })
-        .join('\n');
+function executeSearchTool(toolName, args, data) {
+    const pages = data.pages.filter(p => p.compressionLevel <= COMPRESS_SUMMARY);
+    switch (toolName) {
+    case 'search_pages_by_category': {
+        const cat = args.category;
+        const matched = pages.filter(p => Array.isArray(p.categories) && p.categories.includes(cat));
+        if (matched.length === 0) return `没有找到分类为"${MEMORY_CATEGORIES[cat] || cat}"的页面。`;
+        return matched.map(p => `[${p.id}] ${p.day} | ${p.title}`).join('\n');
+    }
+    case 'recall_pages_by_day': {
+        const day = (args.day || '').toUpperCase();
+        const matched = pages.filter(p => (p.day || '').toUpperCase() === day || (p.day || '').toUpperCase().startsWith(day));
+        if (matched.length === 0) return `${day}没有找到相关页面。`;
+        return matched.map(p => `[${p.id}] ${p.day} | ${p.title}`).join('\n');
+    }
+    case 'get_relationship_history': {
+        const name = args.character_name || '';
+        const nameLower = name.toLowerCase();
+        const matched = pages.filter(p =>
+            (p.keywords || []).some(k => k.toLowerCase().includes(nameLower)) ||
+            (p.characters || []).some(c => c.toLowerCase().includes(nameLower)),
+        );
+        if (matched.length === 0) return `没有找到与"${name}"相关的页面。`;
+        return matched.map(p => `[${p.id}] ${p.day} | ${p.title}`).join('\n');
+    }
+    case 'search_by_keyword': {
+        const kw = (args.keyword || '').toLowerCase();
+        const matched = pages.filter(p =>
+            (p.keywords || []).some(k => k.toLowerCase().includes(kw)) || p.title.toLowerCase().includes(kw),
+        );
+        if (matched.length === 0) return `没有找到关键词"${args.keyword}"相关的页面。`;
+        return matched.map(p => `[${p.id}] ${p.day} | ${p.title}`).join('\n');
+    }
+    default:
+        return '未知工具';
+    }
+}
 
-    const charCatalog = data.characters
-        .map(c => `  ${c.name}: ${c.relationship || '(未知)'}`)
-        .join('\n');
+const SEARCH_TOOL_NAMES = new Set([
+    'search_pages_by_category', 'recall_pages_by_day',
+    'get_relationship_history', 'search_by_keyword',
+]);
 
-    return `你是记忆检索系统。根据当前对话语境，使用工具调用来检索需要的记忆。
+/**
+ * Build the retrieval prompt for the enhanced memory agent.
+ */
+function buildRetrievalPrompt(data, recentText, candidatePages, maxPages) {
+    const pages = (candidatePages || data.pages)
+        .filter(p => p.compressionLevel <= COMPRESS_SUMMARY);
+    const pageCatalog = pages.map(p => {
+        const level = p.compressionLevel === COMPRESS_FRESH ? '详细' : '摘要';
+        const cats = (p.categories || []).map(c => MEMORY_CATEGORIES[c] || c).join(',');
+        return `  [${p.id}] ${p.day} | ${p.title} | ${level} | 分类: ${cats || '无'} | keywords: ${(p.keywords || []).join(',')}`;
+    }).join('\n');
+    const charCatalog = data.characters.map(c => `  ${c.name}: ${c.attitude || '(未知)'}`).join('\n');
+    const embeddingHint = candidatePages ? `\n注意: 以下页面已由语义搜索预筛选，优先从中选择。` : '';
+
+    return `你是记忆检索代理。你的任务是模拟人类记忆联想，为AI的下一次回复提供必要的历史记忆。
 
 ## 故事索引（当前剧情全貌）
 ${formatStoryIndex(data)}
 
-## 可检索的故事页
+## 可检索的故事页${embeddingHint}
 ${pageCatalog || '(无可用页面)'}
 
-## 可检索的角色档案
-${charCatalog || '(无角色)'}
+## 可检索的NPC角色档案
+${charCatalog || '(无NPC角色)'}
 
 ## 当前对话语境（最近几条消息）
 ${recentText}
 
-## 指令
-分析当前对话，判断需要检索哪些记忆来辅助AI回复：
-- 使用 recall_story_page 检索与当前话题相关的故事页（最多3个）
-- 使用 recall_character 检索当前互动角色的详细档案（最多2个）
-- 如果当前对话不需要回忆旧事件或角色信息，则不调用任何工具
+## 检索策略
+像人类回忆一样思考：
+- 当前话题涉及什么过去的事？→ 用 recall_story_page 直接取
+- 提到某个人？→ 用 get_relationship_history 找相关事件
+- 情绪相关的场景？→ 用 search_pages_by_category("emotional")
+- 某天发生了什么？→ 用 recall_pages_by_day("D5")
+- 模糊印象？→ 用 search_by_keyword 搜索
 
-选择标准：
-- 当前正在讨论或涉及的过去事件
-- 当前互动角色的详细背景
-- 可能影响对话走向的历史事件`;
+优先级: 直接相关 > 情感共鸣 > 背景补充
+最终用 recall_story_page 取回最多 ${maxPages} 个页面的详细内容。
+如果不需要回忆任何事件，则不调用工具。`;
 }
 
 /**
- * Tool-calling-based retrieval: secondary API uses tools to select pages/characters.
+ * Enhanced agent retrieval with multi-round tool calling.
  */
-async function toolCallRetrieve(data, recentText, maxPages) {
+async function agentRetrieve(data, recentText, candidatePages, maxPages) {
     try {
         if (data.pages.length === 0 && data.characters.length === 0) {
             return { pages: [], characters: [] };
         }
 
-        const tools = buildRetrievalTools(data);
+        const tools = buildRetrievalTools(data, candidatePages);
         if (tools.length === 0) return { pages: [], characters: [] };
 
-        const prompt = buildRetrievalPrompt(data, recentText);
-        const { toolCalls } = await callSecondaryApiWithTools(
-            null,
-            prompt,
-            tools,
-            300,
-        );
+        const prompt = buildRetrievalPrompt(data, recentText, candidatePages, maxPages);
+
+        // Round 1
+        const round1 = await callSecondaryApiWithTools(null, prompt, tools, 500);
 
         const selectedPages = [];
         const selectedChars = [];
+        const searchCalls = [];
+        const recallCalls = [];
 
-        for (const tc of toolCalls) {
-            if (tc.name === 'recall_story_page' && tc.arguments.page_id) {
-                const page = data.pages.find(p => p.id === tc.arguments.page_id);
-                if (page && selectedPages.length < maxPages) {
-                    selectedPages.push(page);
-                }
-            } else if (tc.name === 'recall_character' && tc.arguments.name) {
-                const char = data.characters.find(c => c.name === tc.arguments.name);
-                if (char && selectedChars.length < 2) {
-                    selectedChars.push(char);
-                }
+        for (const tc of round1.toolCalls) {
+            if (SEARCH_TOOL_NAMES.has(tc.name)) {
+                searchCalls.push(tc);
+            } else if (tc.name === 'recall_story_page' || tc.name === 'recall_character') {
+                recallCalls.push(tc);
             }
         }
 
-        log('Tool call retrieval:', selectedPages.map(p => p.title), selectedChars.map(c => c.name));
+        // Process direct recall calls from round 1
+        for (const tc of recallCalls) {
+            if (tc.name === 'recall_story_page' && tc.arguments.page_id) {
+                const page = data.pages.find(p => p.id === tc.arguments.page_id);
+                if (page && selectedPages.length < maxPages) selectedPages.push(page);
+            } else if (tc.name === 'recall_character' && tc.arguments.name) {
+                const char = data.characters.find(c => c.name === tc.arguments.name);
+                if (char && selectedChars.length < 2) selectedChars.push(char);
+            }
+        }
+
+        // If there were search calls, do round 2
+        if (searchCalls.length > 0 && selectedPages.length < maxPages) {
+            log('Agent round 2: processing', searchCalls.length, 'search calls');
+            const searchResults = searchCalls.map(tc => ({
+                name: tc.name,
+                result: executeSearchTool(tc.name, tc.arguments, data),
+            }));
+            const searchResultText = searchResults.map(r => `[${r.name}]\n${r.result}`).join('\n\n');
+            const round2Prompt = `${prompt}\n\n## 搜索结果\n${searchResultText}\n\n根据搜索结果，用 recall_story_page 选择最相关的页面。最多选 ${maxPages - selectedPages.length} 个。`;
+
+            try {
+                const round2 = await callSecondaryApiWithTools(null, round2Prompt, tools, 300);
+                for (const tc of round2.toolCalls) {
+                    if (tc.name === 'recall_story_page' && tc.arguments.page_id) {
+                        const page = data.pages.find(p => p.id === tc.arguments.page_id);
+                        if (page && selectedPages.length < maxPages && !selectedPages.includes(page)) {
+                            selectedPages.push(page);
+                        }
+                    } else if (tc.name === 'recall_character' && tc.arguments.name) {
+                        const char = data.characters.find(c => c.name === tc.arguments.name);
+                        if (char && selectedChars.length < 2 && !selectedChars.includes(char)) {
+                            selectedChars.push(char);
+                        }
+                    }
+                }
+            } catch (round2Err) {
+                warn('Agent round 2 failed, using round 1 results:', round2Err);
+            }
+        }
+
+        log('Agent retrieval:', selectedPages.map(p => p.title), selectedChars.map(c => c.name));
         return { pages: selectedPages, characters: selectedChars };
     } catch (err) {
-        warn('Tool call retrieval failed, will fallback to keywords:', err);
+        warn('Agent retrieval failed, will fallback to keywords:', err);
         return { pages: [], characters: [] };
     }
 }
+
 
 /**
  * Keyword-based fallback retrieval (when no secondary API or tool calling fails).
@@ -1602,15 +2494,9 @@ async function retrieveMemories(chat, contextSize, abort, type) {
     const recentMessages = chat.slice(-recentCount).filter(m => !m.is_system);
     const recentText = recentMessages.map(m => `${m.name}: ${m.mes}`).join('\n');
 
-    // Find character names mentioned in recent messages (for attitude filtering in index)
-    const mentionedNames = new Set();
-    for (const c of data.characters) {
-        if (recentText.includes(c.name)) mentionedNames.add(c.name);
-    }
-
-    // === Layer 1: Always inject Story Index (timeline + items + relevant attitudes) ===
-    if (data.timeline || data.items.length > 0 || data.characters.length > 0) {
-        const indexText = formatStoryIndex(data, mentionedNames);
+    // === Layer 1: Always inject Story Index (timeline + items + known attitudes + NPC list) ===
+    if (data.timeline || data.items.length > 0 || data.knownCharacterAttitudes.length > 0 || data.characters.length > 0) {
+        const indexText = formatStoryIndex(data);
         setExtensionPrompt(
             PROMPT_KEY_INDEX,
             indexText,
@@ -1633,12 +2519,25 @@ async function retrieveMemories(chat, contextSize, abort, type) {
 
     let retrieved = { pages: [], characters: [] };
 
-    if (s.useSecondaryApi && s.secondaryApiUrl && s.secondaryApiKey) {
-        // Tool-calling retrieval: secondary API uses tools to select pages/characters
-        retrieved = await toolCallRetrieve(data, recentText, s.maxPages);
+    // --- Unified retrieval flow: Embedding → Agent → Keywords ---
+
+    // Step 1: Embedding pre-filter (if configured)
+    let candidatePages = null;
+    if (s.useEmbedding && isEmbeddingConfigured()) {
+        try {
+            candidatePages = await embeddingPreFilter(data, recentText, s.embeddingTopK);
+            log('Embedding pre-filter returned', candidatePages.length, 'candidates');
+        } catch (embErr) {
+            warn('Embedding pre-filter failed, skipping:', embErr);
+        }
     }
 
-    // Fallback to keyword matching if tool calling returned nothing or no secondary API
+    // Step 2: Agent retrieval with enhanced tools (if secondary API available)
+    if (s.useSecondaryApi && s.secondaryApiUrl && s.secondaryApiKey) {
+        retrieved = await agentRetrieve(data, recentText, candidatePages, s.maxPages);
+    }
+
+    // Step 3: Keyword fallback if nothing retrieved
     if (retrieved.pages.length === 0 && retrieved.characters.length === 0) {
         const queryKeywords = extractQueryKeywords(recentMessages);
         log('Keyword fallback, keywords:', [...queryKeywords]);
@@ -1758,7 +2657,7 @@ function updateRecallPanel() {
             if (char.appearance) fields.push(`<div>外貌: ${char.appearance.replace(/</g, '&lt;')}</div>`);
             if (char.personality) fields.push(`<div>性格: ${char.personality.replace(/</g, '&lt;')}</div>`);
             if (char.attitude) fields.push(`<div>态度: ${char.attitude.replace(/</g, '&lt;')}</div>`);
-            if (char.currentState) fields.push(`<div>状态: ${char.currentState.replace(/</g, '&lt;')}</div>`);
+
             html += `<div class="mm-recall-panel-char">
                 <div class="mm-recall-panel-char-name">${(char.name || '').replace(/</g, '&lt;')}</div>
                 ${fields.join('')}
@@ -2204,6 +3103,69 @@ function restoreRecallDisplays() {
 }
 
 // ============================================================
+//  Save Slot UI
+// ============================================================
+
+function refreshSlotListUI() {
+    const charName = getCurrentCharName();
+    const listEl = document.getElementById('mm_slot_list');
+    const currentEl = document.getElementById('mm_current_slot');
+    if (!listEl) return;
+
+    if (!charName) {
+        listEl.innerHTML = '<div class="mm-empty-state">请先选择角色</div>';
+        if (currentEl) currentEl.textContent = '（未选择角色）';
+        return;
+    }
+
+    const slots = listSlots(charName);
+    const activeSlot = getActiveSlotName(charName);
+    if (currentEl) currentEl.textContent = activeSlot || '（未绑定）';
+
+    if (slots.length === 0) {
+        listEl.innerHTML = '<div class="mm-empty-state">暂无存档</div>';
+        return;
+    }
+
+    listEl.innerHTML = slots.map(slot => {
+        const isActive = slot.name === activeSlot;
+        const date = slot.updatedAt ? new Date(slot.updatedAt).toLocaleString() : '未知';
+        return `
+        <div class="mm-slot-card${isActive ? ' mm-slot-active' : ''}" data-slot="${escapeHtml(slot.name)}">
+            <div class="mm-slot-card-header">
+                <span class="mm-slot-card-name">${escapeHtml(slot.name)}</span>
+                ${isActive ? '<span class="mm-slot-badge">当前</span>' : ''}
+            </div>
+            <div class="mm-slot-card-time">${date}</div>
+            <div class="mm-slot-card-actions">
+                ${!isActive ? `<button class="mm-slot-load" data-slot="${escapeHtml(slot.name)}">加载</button>` : ''}
+                <button class="mm-slot-delete mm-btn-danger" data-slot="${escapeHtml(slot.name)}">删除</button>
+            </div>
+        </div>`;
+    }).join('');
+
+    listEl.querySelectorAll('.mm-slot-load').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const slotName = btn.dataset.slot;
+            await loadFromSlot(charName, slotName);
+            toastr.success(`已加载存档「${slotName}」`);
+            refreshSlotListUI();
+            updateBrowserUI();
+        });
+    });
+
+    listEl.querySelectorAll('.mm-slot-delete').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const slotName = btn.dataset.slot;
+            if (!confirm(`确认删除存档「${slotName}」？此操作不可恢复。`)) return;
+            await deleteSlot(charName, slotName);
+            toastr.info(`已删除存档「${slotName}」`);
+            refreshSlotListUI();
+        });
+    });
+}
+
+// ============================================================
 //  Memory Browser UI (Settings Panel)
 // ============================================================
 
@@ -2216,14 +3178,27 @@ function updateBrowserUI() {
         timelineEl.textContent = data.timeline || '（尚无数据）';
     }
 
-    // Characters
+    // Known Character Attitudes
+    const knownCharsEl = document.getElementById('mm_bible_known_chars');
+    if (knownCharsEl) {
+        if (!data.knownCharacterAttitudes || data.knownCharacterAttitudes.length === 0) {
+            knownCharsEl.innerHTML = '<span class="mm-empty-state">暂无已知角色数据</span>';
+        } else {
+            knownCharsEl.innerHTML = data.knownCharacterAttitudes.map(c => {
+                const tip = c.attitude || '(无态度数据)';
+                return `<span class="mm-tag" title="${escapeHtml(tip)}">${escapeHtml(c.name)}</span>`;
+            }).join('');
+        }
+    }
+
+    // NPC Characters
     const charsEl = document.getElementById('mm_bible_characters');
     if (charsEl) {
         if (data.characters.length === 0) {
-            charsEl.innerHTML = '<span class="mm-empty-state">暂无人物数据</span>';
+            charsEl.innerHTML = '<span class="mm-empty-state">暂无NPC数据</span>';
         } else {
             charsEl.innerHTML = data.characters.map(c => {
-                const tip = [c.appearance, c.personality, c.relationship, c.currentState].filter(Boolean).join(' | ');
+                const tip = [c.appearance, c.personality, c.attitude].filter(Boolean).join(' | ');
                 return `<span class="mm-tag" title="${escapeHtml(tip)}">${escapeHtml(c.name)}</span>`;
             }).join('');
         }
@@ -2285,6 +3260,11 @@ function updateBrowserUI() {
                         <span class="mm-memory-card-level ${levelClass}">${levelLabel}</span>
                     </div>
                     <div class="mm-memory-card-tags">
+                        ${(p.categories || []).map(c => {
+                            const color = CATEGORY_COLORS[c] || '#6b7280';
+                            const label = MEMORY_CATEGORIES[c] || c;
+                            return `<span class="mm-tag mm-cat-tag" style="border-color:${color};color:${color}">${escapeHtml(label)}</span>`;
+                        }).join('')}
                         ${(p.keywords || []).map(t => `<span class="mm-tag">${escapeHtml(t)}</span>`).join('')}
                     </div>
                     <div class="mm-memory-card-body">${escapeHtml(p.content)}</div>
@@ -2302,6 +3282,14 @@ function updateBrowserUI() {
                 btn.addEventListener('click', () => onEditPage(btn.dataset.id));
             });
         }
+    }
+
+    // Embedding status
+    const embStatusEl = document.getElementById('mm_embedding_status');
+    if (embStatusEl && getSettings().useEmbedding) {
+        const embCount = Object.keys(data.embeddings || {}).length;
+        const totalPages = data.pages.length;
+        embStatusEl.textContent = `已索引: ${embCount} / ${totalPages} 页`;
     }
 
     updateStatusDisplay();
@@ -2340,6 +3328,7 @@ async function onDeletePage(id) {
     if (!confirmed) return;
 
     data.pages.splice(idx, 1);
+    if (data.embeddings) delete data.embeddings[id];
     saveMemoryData();
     updateBrowserUI();
 }
@@ -2349,23 +3338,93 @@ async function onEditPage(id) {
     const page = data.pages.find(p => p.id === id);
     if (!page) return;
 
-    const newContent = prompt('编辑故事页内容:', page.content);
-    if (newContent === null) return;
+    const card = document.querySelector(`.mm-memory-card[data-id="${id}"]`);
+    if (!card || card.dataset.editing === '1') return;
+    card.dataset.editing = '1';
 
-    page.content = newContent;
-    saveMemoryData();
-    updateBrowserUI();
+    const bodyEl = card.querySelector('.mm-memory-card-body');
+    const actionsEl = card.querySelector('.mm-memory-card-actions');
+    if (!bodyEl || !actionsEl) return;
+
+    // Replace body with textarea
+    bodyEl.style.display = 'none';
+    const textarea = document.createElement('textarea');
+    textarea.className = 'mm-edit-area';
+    textarea.style.minHeight = '100px';
+    textarea.value = page.content;
+    bodyEl.parentNode.insertBefore(textarea, bodyEl.nextSibling);
+
+    // Replace action buttons
+    const origActions = actionsEl.innerHTML;
+    actionsEl.innerHTML = `
+        <button class="mm-btn-save" style="color:#22c55e">保存</button>
+        <button class="mm-btn-cancel-edit">取消</button>
+    `;
+
+    const cleanup = () => {
+        textarea.remove();
+        bodyEl.style.display = '';
+        delete card.dataset.editing;
+        actionsEl.innerHTML = origActions;
+        // Re-bind original buttons
+        actionsEl.querySelector('.mm-btn-edit')?.addEventListener('click', () => onEditPage(id));
+        actionsEl.querySelector('.mm-btn-delete')?.addEventListener('click', () => onDeletePage(id));
+    };
+
+    actionsEl.querySelector('.mm-btn-save').addEventListener('click', () => {
+        page.content = textarea.value;
+        saveMemoryData();
+        cleanup();
+        bodyEl.textContent = page.content;
+    });
+
+    actionsEl.querySelector('.mm-btn-cancel-edit').addEventListener('click', cleanup);
+    textarea.focus();
 }
 
 async function onEditTimelineClick() {
+    const previewEl = document.getElementById('mm_bible_timeline');
+    const btnRow = document.getElementById('mm_timeline_btn_row');
+    if (!previewEl || !btnRow) return;
+
+    // Already in edit mode?
+    if (previewEl.dataset.editing === '1') return;
+    previewEl.dataset.editing = '1';
+
     const data = getMemoryData();
     const current = data.timeline || '';
-    const newText = prompt('编辑时间线:', current);
-    if (newText === null) return;
 
-    data.timeline = newText;
-    saveMemoryData();
-    updateBrowserUI();
+    // Replace preview with textarea
+    previewEl.style.display = 'none';
+    const textarea = document.createElement('textarea');
+    textarea.className = 'mm-edit-area';
+    textarea.style.minHeight = '160px';
+    textarea.value = current;
+    previewEl.parentNode.insertBefore(textarea, previewEl.nextSibling);
+
+    // Replace button row
+    btnRow.innerHTML = `
+        <button id="mm_save_timeline" style="color:#22c55e">保存</button>
+        <button id="mm_cancel_timeline">取消</button>
+    `;
+
+    const cleanup = () => {
+        textarea.remove();
+        previewEl.style.display = '';
+        delete previewEl.dataset.editing;
+        btnRow.innerHTML = '<button id="mm_edit_timeline">编辑时间线</button>';
+        document.getElementById('mm_edit_timeline')?.addEventListener('click', onEditTimelineClick);
+    };
+
+    document.getElementById('mm_save_timeline').addEventListener('click', () => {
+        data.timeline = textarea.value;
+        saveMemoryData();
+        cleanup();
+        updateBrowserUI();
+    });
+
+    document.getElementById('mm_cancel_timeline').addEventListener('click', cleanup);
+    textarea.focus();
 }
 
 async function onResetClick() {
@@ -2404,21 +3463,39 @@ function onImportClick() {
         if (!file) return;
         try {
             const text = await file.text();
-            const imported = JSON.parse(text);
-            // Accept both v1 and v2 formats
+            let imported = JSON.parse(text);
+            // Accept v1, v2, v3 and v4 formats
             if (!imported.pages && !imported.storyBible && !imported.memories) {
                 throw new Error('Invalid format');
             }
             const ctx = getContext();
-            // If v1 format, migrate
+            // Migrate through version chain
             if (imported.storyBible || imported.version === 1) {
-                ctx.chatMetadata.memoryManager = migrateV1toV2(imported);
-            } else {
-                ctx.chatMetadata.memoryManager = imported;
+                imported = migrateV1toV2(imported);
             }
+            if (imported.version === 2) {
+                imported = migrateV2toV3(imported);
+            }
+            if (imported.version === 3) {
+                imported = migrateV3toV4(imported);
+            }
+            ctx.chatMetadata.memoryManager = imported;
             saveMemoryData();
             updateBrowserUI();
             toastr?.success?.('记忆数据已导入', 'Memory Manager');
+
+            // Rebuild embeddings if configured
+            const s = getSettings();
+            if (s.useEmbedding && isEmbeddingConfigured() && imported.pages.length > 0) {
+                try {
+                    toastr?.info?.('正在为导入数据生成向量...', 'Memory Manager');
+                    await embedAllPages(imported.pages);
+                    saveMemoryData();
+                    toastr?.success?.(`已为 ${imported.pages.length} 个页面生成向量`, 'Memory Manager');
+                } catch (embErr) {
+                    warn('Post-import embedding failed:', embErr);
+                }
+            }
         } catch (err) {
             toastr?.error?.('导入失败: ' + err.message, 'Memory Manager');
         }
@@ -2444,6 +3521,22 @@ function onChatChanged() {
 
     const data = getMemoryData();
     data.processing.extractionInProgress = false;
+
+    // Cross-chat save loading: if new chat has no memory but character has a save
+    const charName = getCurrentCharName();
+    if (charName && (!data.timeline && data.pages.length === 0)) {
+        const activeSlot = getActiveSlotName(charName);
+        if (activeSlot) {
+            toastr?.info?.(
+                `检测到角色「${charName}」的记忆存档「${activeSlot}」，点击此处加载`,
+                'Memory Manager',
+                {
+                    timeOut: 10000,
+                    onclick: () => loadFromSlot(charName, activeSlot),
+                },
+            );
+        }
+    }
 
     // Re-inject story index for new chat
     if (data.timeline || data.characters.length > 0) {
@@ -2579,7 +3672,7 @@ jQuery(async function () {
     updateBrowserUI();
     setTimeout(restoreRecallDisplays, 1000);
 
-    log('Memory Manager v4.0 (PageIndex) initialized');
+    log('Memory Manager v5.0 (PageIndex+Embedding+Agent) initialized');
 });
 
 export { MODULE_NAME };

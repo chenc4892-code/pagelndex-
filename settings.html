@@ -1,7 +1,7 @@
 <div class="mm-settings-container">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>Memory Manager v4 — PageIndex 记忆管理</b>
+            <b>Memory Manager v5 — PageIndex+Embedding+Agent 记忆管理</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -102,6 +102,31 @@
             </div>
             <hr />
 
+            <!-- Save Management (独立存档) -->
+            <div class="mm-section">
+                <div class="mm-section-title">记忆存档</div>
+                <div class="mm-save-current" style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                    <span>当前存档:</span>
+                    <span id="mm_current_slot" style="font-weight:600;">（未绑定）</span>
+                    <button id="mm_save_now" style="margin-left:auto;">立即保存</button>
+                </div>
+                <div id="mm_slot_list" class="mm-slot-list">
+                    <div class="mm-empty-state">暂无存档</div>
+                </div>
+                <div class="mm-action-row" style="margin-top:6px;">
+                    <button id="mm_new_slot">新建存档</button>
+                </div>
+                <label class="checkbox_label" for="mm_auto_save_slot" style="margin-top:6px;">
+                    <input id="mm_auto_save_slot" type="checkbox" checked />
+                    <span>提取后自动保存到当前存档</span>
+                </label>
+                <small style="opacity:0.6">
+                    记忆存档独立于聊天记录，切换聊天/新建聊天时可自动加载同角色的存档。
+                    支持多存档槽位（IF线/分支线）。
+                </small>
+            </div>
+            <hr />
+
             <!-- Secondary API (副API) -->
             <div class="mm-section">
                 <div class="mm-section-title">副API设置 (记忆提取/检索/压缩用)</div>
@@ -126,6 +151,45 @@
                     <div class="mm-action-row" style="margin-top:6px">
                         <button id="mm_test_secondary_api">测试连接</button>
                     </div>
+                </div>
+            </div>
+            <hr />
+
+            <!-- Embedding (向量检索) -->
+            <div class="mm-section">
+                <div class="mm-section-title">Embedding 向量检索</div>
+                <label class="checkbox_label" for="mm_use_embedding">
+                    <input id="mm_use_embedding" type="checkbox" />
+                    <span>启用 Embedding 语义检索</span>
+                </label>
+                <small style="opacity:0.6">使用副API的 /v1/embeddings 端点生成向量。默认复用副API地址和密钥。</small>
+                <div id="mm_embedding_fields" style="display:none; margin-top:6px;">
+                    <label for="mm_embedding_model">Embedding 模型</label>
+                    <input id="mm_embedding_model" class="text_pole" type="text"
+                           placeholder="text-embedding-3-large" value="text-embedding-3-large" />
+
+                    <label for="mm_embedding_dimensions">
+                        向量维度: <span id="mm_embedding_dimensions_value">256</span>
+                    </label>
+                    <input id="mm_embedding_dimensions" type="range" min="64" max="1024" step="64" value="256" />
+                    <small style="opacity:0.6">越高越精确，但占更多存储空间。推荐 256。</small>
+
+                    <label for="mm_embedding_top_k">
+                        预筛选数量: <span id="mm_embedding_top_k_value">10</span>
+                    </label>
+                    <input id="mm_embedding_top_k" type="range" min="3" max="20" step="1" value="10" />
+
+                    <label for="mm_embedding_api_url">Embedding API地址（留空复用副API）</label>
+                    <input id="mm_embedding_api_url" class="text_pole" type="text" placeholder="留空则使用副API地址" />
+
+                    <label for="mm_embedding_api_key">Embedding API密钥（留空复用副API）</label>
+                    <input id="mm_embedding_api_key" class="text_pole" type="password" placeholder="留空则使用副API密钥" />
+
+                    <div class="mm-action-row" style="margin-top:6px">
+                        <button id="mm_test_embedding">测试Embedding</button>
+                        <button id="mm_rebuild_vectors">重建向量库</button>
+                    </div>
+                    <div id="mm_embedding_status" style="margin-top:4px; font-size:12px; opacity:0.6"></div>
                 </div>
             </div>
             <hr />
@@ -202,7 +266,7 @@
                 <div>待处理消息: <span id="mm_pending_count">0</span></div>
             </div>
 
-            <div class="mm-version">Memory Manager v4.0.0 (PageIndex)</div>
+            <div class="mm-version">Memory Manager v5.0.0 (PageIndex+Embedding+Agent)</div>
 
         </div>
     </div>
